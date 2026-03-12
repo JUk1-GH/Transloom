@@ -1,0 +1,120 @@
+[
+  {
+    "name": "desktop-shell",
+    "status": "partial",
+    "description": "Electron 主窗口、独立框选 overlay、桌面权限引导、最近截图回放与 renderer bridge 已串通；capture 工作区已经能消费桌面事件并在浏览器预览下回退到 mock overlay。",
+    "files": [
+      "electron/main.ts",
+      "electron/preload.ts",
+      "src/lib/ipc/desktop-client.ts",
+      "src/app/capture/page.tsx",
+      "src/components/workspace/capture-translation-workspace.tsx"
+    ],
+    "nextStep": "补齐桌面端截图→翻译→overlay 展示的端到端 smoke、overlay 生命周期收口，以及最近截图/权限状态的异常恢复。"
+  },
+  {
+    "name": "text-translation",
+    "status": "partial",
+    "description": "文本翻译页面、API、workspace 与 translateText 主流程已联通；OpenAI-compatible provider 走真实请求，术语表预替换、usage 统计和 history 落盘也已接入，但 DeepL/OpenAI/Google 仍是轻 stub。",
+    "files": [
+      "src/app/translate/page.tsx",
+      "src/components/workspace/text-translation-workspace.tsx",
+      "src/app/api/translate/route.ts",
+      "src/server/translation/translate-text.ts",
+      "src/server/translation/providers/provider-registry.ts",
+      "src/server/translation/providers/custom-openai-compatible-provider.ts"
+    ],
+    "nextStep": "把具名 provider 从占位实现升级为真实适配器，并在 UI 中明确区分真实响应、fallback mock 与 provider 错误。"
+  },
+  {
+    "name": "screenshot-translation",
+    "status": "partial",
+    "description": "截屏翻译已覆盖图片可读性校验、OCR、逐区域文本翻译、overlay layout、history/usage 写入以及桌面端最近截图重译；浏览器预览下也能展示 mock overlay。",
+    "files": [
+      "src/app/capture/page.tsx",
+      "src/app/api/capture/translate/route.ts",
+      "src/lib/pipeline/run-screenshot-translation.ts",
+      "src/lib/ocr/providers/openai-vision.ts",
+      "src/lib/layout/overlay-layout.ts",
+      "src/components/workspace/capture-translation-workspace.tsx"
+    ],
+    "nextStep": "补上真实桌面截图链路的回归验证、overlay 区域元数据细化、失败重试与更稳定的 OCR/翻译告警呈现。"
+  },
+  {
+    "name": "provider-settings",
+    "status": "partial",
+    "description": "设置页已经能通过 desktop bridge 读写本机配置，并通过 /api/providers 持久化 provider 元数据；Provider config service 支持 Prisma/内存双路径，但 runtime snapshot API 仍是 stub，密钥校验与可视化状态还不完整。",
+    "files": [
+      "src/app/settings/page.tsx",
+      "src/domain/translation/provider.ts",
+      "src/server/providers/provider-config-service.ts",
+      "src/app/api/providers/route.ts",
+      "src/app/api/provider-runtime/route.ts"
+    ],
+    "nextStep": "把 provider runtime route 改成真实快照来源，补齐密钥测试/校验结果回写，并明确文本与视觉能力的配置边界。"
+  },
+  {
+    "name": "history",
+    "status": "partial",
+    "description": "文本翻译与截屏翻译都已写入统一 history service，历史页面和 /api/history 也会读取真实本地数据；当前仍缺筛选、缩略图与失败态呈现。",
+    "files": [
+      "src/app/history/page.tsx",
+      "src/app/api/history/route.ts",
+      "src/server/history/service.ts",
+      "prisma/schema.prisma"
+    ],
+    "nextStep": "增加按模式/provider/语言筛选，补充截图缩略图或 overlay 元数据，并把失败记录单独暴露给 UI。"
+  },
+  {
+    "name": "glossary",
+    "status": "partial",
+    "description": "术语表页面、API 和 service 已经支持本地创建/列出 glossary，translateText 也会在请求 provider 前做精确字符串替换；目前还没有多条目编辑、选择策略和 provider 级命中反馈。",
+    "files": [
+      "src/app/glossary/page.tsx",
+      "src/app/api/glossary/route.ts",
+      "src/server/glossary/service.ts",
+      "src/server/translation/translate-text.ts",
+      "prisma/schema.prisma"
+    ],
+    "nextStep": "补齐 glossary 选择策略、多条目编辑/删除、命中结果回显，并把术语表与 provider 能力绑定起来。"
+  },
+  {
+    "name": "account",
+    "status": "scaffolded",
+    "description": "当前本地单机版默认绕过账户体系，account 页面直接回到首页，历史/术语表/usage 通过本地默认用户承接；auth 依赖边界仍保留在 schema 与未来规划层。",
+    "files": [
+      "src/app/account/page.tsx",
+      "src/lib/db.ts",
+      "prisma/schema.prisma",
+      "package.json"
+    ],
+    "nextStep": "仅在重新引入多用户/同步需求时再设计最小登录态；现阶段继续保持本地默认用户模型。"
+  },
+  {
+    "name": "billing",
+    "status": "scaffolded",
+    "description": "usage 汇总服务和 /api/usage 已可返回本地字符数与请求次数，billing service 也能生成 local plan 摘要；但 billing/account 页面仍未承接展示，线上结账路由明确返回 410。",
+    "files": [
+      "src/server/billing/service.ts",
+      "src/server/usage/service.ts",
+      "src/app/api/usage/route.ts",
+      "src/app/api/billing/checkout/route.ts",
+      "src/app/billing/page.tsx"
+    ],
+    "nextStep": "如果保留本地版计费视角，先把 usage/billing 摘要接到页面；若不做在线计费，则把 checkout 相关边界继续收缩成只读说明。"
+  },
+  {
+    "name": "persistence-schema",
+    "status": "partial",
+    "description": "Prisma schema 已不只是静态设计：provider 元数据、history、glossary、usage 等 runtime service 都会优先落到本地 SQLite，并在不可用时回退到内存态；但 migration/bootstrap 和打包后数据库路径仍需要稳固。",
+    "files": [
+      "prisma/schema.prisma",
+      "src/lib/db.ts",
+      "src/server/providers/provider-config-service.ts",
+      "src/server/history/service.ts",
+      "src/server/glossary/service.ts",
+      "src/server/usage/service.ts"
+    ],
+    "nextStep": "稳定本地数据库初始化与迁移策略，确认 packaged desktop 的数据目录、缺表恢复和 schema 升级路径。"
+  }
+]

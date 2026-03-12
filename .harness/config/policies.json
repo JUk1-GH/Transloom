@@ -1,0 +1,73 @@
+{
+  "version": 1,
+  "scheduler": {
+    "defaultLeaseMinutes": 90,
+    "retryBackoffMinutes": [
+      15,
+      60,
+      240
+    ],
+    "defaultModel": "sonnet"
+  },
+  "roles": {
+    "implementer": {
+      "leaseFrom": [
+        "queued"
+      ],
+      "completeTo": "ready_for_verification"
+    },
+    "verifier": {
+      "leaseFrom": [
+        "ready_for_verification"
+      ],
+      "completeTo": "ready_for_review"
+    },
+    "reviewer": {
+      "leaseFrom": [
+        "ready_for_review"
+      ],
+      "completeTo": "done"
+    }
+  },
+  "validationProfiles": {
+    "web-core": {
+      "commands": [
+        "npm run lint",
+        "npm run typecheck",
+        "npm run test"
+      ],
+      "manual": []
+    },
+    "translation": {
+      "commands": [
+        "npm run lint",
+        "npm run typecheck",
+        "npm run test"
+      ],
+      "manual": [
+        "Verify the affected translation flow through the UI"
+      ]
+    },
+    "desktop": {
+      "commands": [
+        "npm run lint",
+        "npm run typecheck",
+        "npm run test",
+        "npm run build:desktop"
+      ],
+      "manual": [
+        "Run desktop shell or screenshot capture smoke test"
+      ]
+    },
+    "persistence": {
+      "commands": [
+        "npm run lint",
+        "npm run typecheck",
+        "npm run test"
+      ],
+      "manual": [
+        "Verify persistence reads and writes through the product surface"
+      ]
+    }
+  }
+}

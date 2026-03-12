@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "basic-memory-workspace": {
+      "type": "stdio",
+      "command": "/Users/a1234/.local/bin/basic-memory",
+      "args": [
+        "mcp",
+        "--project",
+        "transloom"
+      ],
+      "env": {}
+    }
+  }
+}

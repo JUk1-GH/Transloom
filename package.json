@@ -1,0 +1,104 @@
+{
+  "name": "transloom",
+  "version": "0.1.1",
+  "private": true,
+  "main": "dist-electron/electron/main.js",
+  "scripts": {
+    "dev:web": "next dev --webpack",
+    "dev": "npm run dev:web",
+    "dev:desktop": "concurrently -k \"npm:dev:web\" \"npm:electron:watch\" \"npm:electron:dev\"",
+    "electron:dev": "wait-on tcp:3000 dist-electron/electron/main.js && cross-env NODE_ENV=development ELECTRON_START_URL=http://localhost:3000 electron .",
+    "electron:watch": "tsc -p electron/tsconfig.json --watch --preserveWatchOutput",
+    "build:web": "rm -rf .next && node scripts/repair-swc.mjs && next build --webpack && node scripts/prune-standalone.mjs",
+    "build": "npm run build:web",
+    "build:electron": "tsc -p electron/tsconfig.json",
+    "build:desktop": "npm run build && npm run build:electron",
+    "package:desktop": "npm run build:desktop && electron-builder --mac dmg dir --publish never",
+    "start:web": "next start",
+    "start": "npm run start:web",
+    "start:desktop": "concurrently -k \"npm:start:web\" \"npm:electron:start\"",
+    "electron:start": "wait-on tcp:3000 dist-electron/electron/main.js && cross-env NODE_ENV=production ELECTRON_START_URL=http://localhost:3000 electron .",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate dev",
+    "postinstall": "npm run prisma:generate",
+    "test": "npm run lint && npm run typecheck",
+    "harness": "node .harness/bin/control-plane.mjs",
+    "harness:bootstrap": "node .harness/bin/control-plane.mjs bootstrap",
+    "harness:doctor": "node .harness/bin/control-plane.mjs doctor",
+    "harness:status": "node .harness/bin/control-plane.mjs status",
+    "harness:supervise": "node .harness/bin/control-plane.mjs supervise-once"
+  },
+  "dependencies": {
+    "@next/swc-darwin-arm64": "^16.1.6",
+    "@prisma/client": "^6.5.0",
+    "clsx": "^2.1.1",
+    "next": "16.1.6",
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "concurrently": "^9.1.2",
+    "cross-env": "^7.0.3",
+    "electron": "^35.0.0",
+    "electron-builder": "^26.0.12",
+    "eslint": "^9",
+    "eslint-config-next": "16.1.6",
+    "prisma": "^6.5.0",
+    "tailwindcss": "^4",
+    "ts-node": "^10.9.2",
+    "typescript": "^5",
+    "wait-on": "^8.0.3"
+  },
+  "build": {
+    "appId": "local.transloom.app",
+    "productName": "Transloom",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist-electron/**/*",
+      "package.json",
+      "!node_modules/**/*",
+      "!src/**/*",
+      "!prisma/**/*",
+      "!.next/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": ".next/standalone",
+        "to": "app-dist/.next/standalone"
+      },
+      {
+        "from": ".next/standalone/node_modules",
+        "to": "app-dist/.next/standalone/node_modules"
+      },
+      {
+        "from": ".next/static",
+        "to": "app-dist/.next/standalone/.next/static"
+      },
+      {
+        "from": "public",
+        "to": "app-dist/.next/standalone/public"
+      },
+      {
+        "from": "prisma/transloom.db",
+        "to": "app-dist/prisma/transloom.db"
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.productivity",
+      "target": [
+        "dir",
+        "dmg"
+      ]
+    },
+    "npmRebuild": false
+  }
+}

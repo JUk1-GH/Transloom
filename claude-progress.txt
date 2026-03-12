@@ -1,0 +1,41 @@
+Transloom harness progress snapshot
+Updated: 2026-03-12
+
+What changed
+- The heavy harness now exists under `.harness/` as a repo-local control plane.
+- The previous feature inventory understated several uncommitted product changes.
+- `feature_list.json` has been refreshed to match the current working tree rather than the earlier lightweight assessment.
+
+Current product maturity (from the working tree)
+- Desktop shell is real: Electron capture overlay, permission onboarding, latest-capture replay, and renderer bridge are wired through the capture workspace.
+- Text translation is partially real: `translateText` now applies glossary substitutions, records usage/history, and can call a real OpenAI-compatible provider, but named providers like DeepL/OpenAI/Google are still stubs.
+- Screenshot translation is partially real: OCR, per-region translation, overlay layout, usage tracking, and screenshot history are linked; desktop flow still needs stronger end-to-end validation.
+- Provider settings are partially real: desktop settings + `/api/providers` persist metadata, but `/api/provider-runtime` is still a stub and secure runtime-state reporting is incomplete.
+- History and glossary have moved beyond scaffolding: both have pages, APIs, and local-first persistence paths in active use.
+- Account and billing remain intentionally limited for the local single-user build: account redirects home, checkout returns 410, usage summary exists but billing UI is not surfaced.
+- Persistence is partially real: Prisma-backed local SQLite plus in-memory fallbacks now back provider metadata, history, glossary, and usage.
+
+Heavy harness operating model
+- `feature_list.json` is the tracked inventory of feature maturity and next implementation edges.
+- `.harness/state/tasks.json` is the mutable execution queue generated from the feature list.
+- `.harness/state/events.jsonl` and `.harness/state/runs.jsonl` are append-only ledgers for leasing, dispatch, and run evidence.
+- `init.sh` remains a re-entry helper only; orchestration lives in `.harness/`.
+
+Role split
+- implementer: moves one leased task to a verifiable state.
+- verifier: reruns the validation profile and product flow checks.
+- reviewer: accepts or rejects the verified slice before it is considered done.
+
+Operational notes for future sessions
+- Start with `npm run harness:doctor` and `npm run harness:status`.
+- Regenerate queue state with `npm run harness:bootstrap` after feature inventory changes.
+- Use `npm run harness -- lease ...`, `dispatch ...`, `complete ...`, and `fail ...` instead of hand-editing runtime state.
+- Before editing any existing function, class, or method, follow the repo GitNexus rules for impact analysis.
+- The repo still has no real git `HEAD`, so worktree isolation remains disabled until the first commit exists.
+
+Recommended implementation order from here
+1. Replace stub named providers with real adapters and improve runtime/provider error surfacing.
+2. Convert `/api/provider-runtime` into a true runtime snapshot sourced from saved local settings.
+3. Harden screenshot translation with repeatable desktop smoke coverage and richer overlay metadata.
+4. Add filters and richer metadata to history and glossary management flows.
+5. Decide whether billing/account stay intentionally absent in the local edition or get real single-user surfaces.

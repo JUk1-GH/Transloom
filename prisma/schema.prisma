@@ -1,0 +1,113 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+enum TranslationMode {
+  text
+  screenshot
+}
+
+enum PlanTier {
+  free
+  pro
+  team
+}
+
+enum SubscriptionStatus {
+  inactive
+  trialing
+  active
+  past_due
+  canceled
+}
+
+model User {
+  id           String               @id @default(cuid())
+  email        String               @unique
+  name         String?
+  createdAt    DateTime             @default(now())
+  updatedAt    DateTime             @updatedAt
+  glossaries   Glossary[]
+  history      TranslationHistory[]
+  usageRecords UsageRecord[]
+  subscription Subscription?
+}
+
+model Subscription {
+  id                   String             @id @default(cuid())
+  userId               String             @unique
+  planTier             PlanTier           @default(free)
+  status               SubscriptionStatus @default(inactive)
+  stripeCustomerId     String?
+  stripeSubscriptionId String?
+  currentPeriodEnd     DateTime?
+  user                 User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model UsageRecord {
+  id                   String   @id @default(cuid())
+  userId               String
+  month                String
+  charactersTranslated Int      @default(0)
+  requestCount         Int      @default(0)
+  user                 User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, month])
+}
+
+model Glossary {
+  id         String         @id @default(cuid())
+  userId     String
+  name       String
+  sourceLang String
+  targetLang String
+  createdAt  DateTime       @default(now())
+  entries    GlossaryEntry[]
+  user       User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  history    TranslationHistory[]
+}
+
+model GlossaryEntry {
+  id         String   @id @default(cuid())
+  glossaryId String
+  sourceTerm String
+  targetTerm String
+  glossary   Glossary @relation(fields: [glossaryId], references: [id], onDelete: Cascade)
+}
+
+model TranslationHistory {
+  id             String          @id @default(cuid())
+  userId         String
+  mode           TranslationMode @default(text)
+  sourceText     String
+  translatedText String
+  sourceLang     String?
+  targetLang     String
+  provider       String
+  charactersUsed Int             @default(0)
+  screenshotPath String?
+  success        Boolean         @default(true)
+  createdAt      DateTime        @default(now())
+  glossaryId     String?
+  glossary       Glossary?       @relation(fields: [glossaryId], references: [id], onDelete: SetNull)
+  user           User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model ProviderCredentialMeta {
+  id              String   @id @default(cuid())
+  userId          String?
+  provider        String
+  label           String
+  baseUrl         String?
+  model           String?
+  isEnabled       Boolean  @default(true)
+  hasStoredSecret Boolean  @default(false)
+  lastValidated   DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
