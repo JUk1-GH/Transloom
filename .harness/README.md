@@ -88,9 +88,10 @@ npm run harness -- fail --task FT-001 --role implementer --owner claude-local --
 
 - `supervisor-loop.mjs` is additive. It does not replace the existing control-plane commands.
 - The loop defaults to `reviewer,verifier,implementer` priority so already-in-flight work drains before new implementation starts.
-- Each round leases the first available task for the highest-priority role, prepares a prompt pack, runs Claude, and records `run.started` / `run.finished` or `run.errored` ledger entries.
+- Each round leases the first available task for the highest-priority role, prepares a prompt pack, appends a `result.json` handoff contract, runs Claude, and records `run.started` / `run.finished` or `run.errored` ledger entries.
 - If Claude exits non-zero, the supervisor immediately calls `fail` for the leased task so the queue does not sit on an expired lease.
-- If Claude exits zero but leaves the task leased, the supervisor warns and preserves the lease so the operator can inspect the captured run log.
+- If Claude exits zero and the child agent wrote a valid `result.json`, the supervisor auto-applies `complete` or `fail` based on that handoff.
+- If Claude exits zero but the handoff file is missing or invalid, the supervisor warns and preserves the lease so the operator can inspect the captured run log.
 - `harness:watch` keeps polling forever; `harness:drain` exits as soon as nothing can be leased.
 
 ## Operational Rules

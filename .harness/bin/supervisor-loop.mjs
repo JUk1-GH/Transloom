@@ -57,18 +57,16 @@ function main() {
 
     const role = leasedTask.lease.role;
     console.log(`[${nowIso()}] leased ${leasedTask.id} as ${role}`);
-    const run = prepareRun({ taskId: leasedTask.id, role, owner, model });
+    let run = prepareRun({ taskId: leasedTask.id, role, owner, model });
+    run = attachResultContract(run);
     console.log(`[${nowIso()}] prepared ${run.runId}`);
     const result = executePreparedRun(run);
 
     if (result.exitCode !== 0) {
       console.log(`[${nowIso()}] run ${run.runId} failed with exit=${result.exitCode}`);
-      failLease({ taskId: leasedTask.id, role, owner, exitCode: result.exitCode, signal: result.signal });
+      failLease({ taskId: leasedTask.id, role, owner, reason: `supervisor observed claude exit ${result.exitCode}${result.signal ? ` signal=${result.signal}` : ''}` });
     } else {
-      const currentTask = readTask(leasedTask.id);
-      if (currentTask?.lease && currentTask.lease.owner === owner && currentTask.lease.role === role) {
-        console.log(`[${nowIso()}] warning: ${leasedTask.id} is still leased after a successful run`);
-      }
+      finalizeSuccessfulRun(run);
     }
 
     const summary = readStatusSummary();
@@ -112,6 +110,41 @@ function prepareRun({ taskId, role, owner, model }) {
   }
   const result = runControlPlane(commandArgs);
   return parseJsonOutput(result.stdout);
+}
+
+function attachResultContract(run) {
+  const resultPath = path.join(path.dirname(run.metadataPath), 'result.json');
+  const promptContract = buildResultContract(run, resultPath);
+  fs.appendFileSync(run.promptPath, promptContract);
+
+  const metadata = JSON.parse(fs.readFileSync(run.metadataPath, 'utf8'));
+  metadata.resultPath = resultPath;
+  fs.writeFileSync(run.metadataPath, `${JSON.stringify(metadata, null, 2)}\n`);
+
+  return { ...run, resultPath };
+}
+
+function buildResultContract(run, resultPath) {
+  const example = {
+    taskId: run.taskId,
+    role: run.role,
+    owner: run.owner,
+    disposition: run.role === 'implementer' ? 'complete' : 'complete',
+    note: run.role === 'implementer'
+      ? 'Implemented the slice, automated validations passed, pending manual desktop smoke in verification.'
+      : 'Role handoff complete.',
+    nextStatus: defaultNextStatusForRole(run.role),
+    artifacts: [],
+  };
+
+  return `\n\n## Supervisor Handoff Contract\n- Before exiting, write JSON to \`${resultPath}\`.\n- If you successfully finish your role, set \`disposition\` to \`complete\` and choose the appropriate \`nextStatus\`.\n- If work is blocked or validations fail, set \`disposition\` to \`fail\` and include a short \`reason\`.\n- If automated validations passed but manual desktop smoke is still pending, an implementer should use \`nextStatus: \"ready_for_verification\"\`.\n- Do not exit without writing this file. The supervisor uses it to close the lease safely.\n\nJSON example:\n\`\`\`json\n${JSON.stringify(example, null, 2)}\n\`\`\`\n\nFailure example:\n\`\`\`json\n${JSON.stringify({
+    taskId: run.taskId,
+    role: run.role,
+    owner: run.owner,
+    disposition: 'fail',
+    reason: 'npm run build:desktop still fails',
+    artifacts: [],
+  }, null, 2)}\n\`\`\`\n`;
 }
 
 function executePreparedRun(run) {
@@ -159,8 +192,151 @@ function executePreparedRun(run) {
   return { exitCode: result.status ?? 1, signal: result.signal || null };
 }
 
-function failLease({ taskId, role, owner, exitCode, signal }) {
-  const reason = `supervisor observed claude exit ${exitCode}${signal ? ` signal=${signal}` : ''}`;
+function finalizeSuccessfulRun(run) {
+  const task = readTask(run.taskId);
+  if (!isTaskStillLeasedToRun(task, run)) {
+    appendJsonl(EVENTS_PATH, {
+      at: nowIso(),
+      type: 'run.handoff.skipped',
+      taskId: run.taskId,
+      role: run.role,
+      owner: run.owner,
+      note: 'lease already released before supervisor auto-close',
+    });
+    console.log(`[${nowIso()}] lease already released for ${run.taskId}; skipping auto-close`);
+    return;
+  }
+
+  const handoffFile = readHandoffFile(run.resultPath);
+  if (!handoffFile.ok) {
+    appendJsonl(EVENTS_PATH, {
+      at: nowIso(),
+      type: 'run.handoff.missing',
+      taskId: run.taskId,
+      role: run.role,
+      owner: run.owner,
+      note: handoffFile.reason,
+    });
+    console.log(`[${nowIso()}] warning: ${run.taskId} is still leased after a successful run (${handoffFile.reason})`);
+    return;
+  }
+
+  const validation = validateHandoff(handoffFile.value, run);
+  if (!validation.ok) {
+    appendJsonl(EVENTS_PATH, {
+      at: nowIso(),
+      type: 'run.handoff.invalid',
+      taskId: run.taskId,
+      role: run.role,
+      owner: run.owner,
+      note: validation.reason,
+    });
+    console.log(`[${nowIso()}] warning: invalid handoff for ${run.taskId} (${validation.reason})`);
+    return;
+  }
+
+  const handoff = validation.value;
+  if (handoff.disposition === 'fail') {
+    failLease({
+      taskId: run.taskId,
+      role: run.role,
+      owner: run.owner,
+      reason: handoff.reason || handoff.note || 'agent requested requeue',
+    });
+    return;
+  }
+
+  completeLease({
+    taskId: run.taskId,
+    role: run.role,
+    owner: run.owner,
+    note: handoff.note,
+    nextStatus: handoff.nextStatus,
+    artifacts: handoff.artifacts,
+  });
+}
+
+function readHandoffFile(resultPath) {
+  if (!resultPath || !fs.existsSync(resultPath)) {
+    return { ok: false, reason: `missing result file at ${resultPath}` };
+  }
+
+  try {
+    return { ok: true, value: JSON.parse(fs.readFileSync(resultPath, 'utf8')) };
+  } catch {
+    return { ok: false, reason: `invalid JSON in ${resultPath}` };
+  }
+}
+
+function validateHandoff(raw, run) {
+  if (!raw || typeof raw !== 'object') {
+    return { ok: false, reason: 'handoff payload must be an object' };
+  }
+  if (raw.taskId !== run.taskId) {
+    return { ok: false, reason: `taskId mismatch: expected ${run.taskId}` };
+  }
+  if (raw.role !== run.role) {
+    return { ok: false, reason: `role mismatch: expected ${run.role}` };
+  }
+  if (raw.owner !== run.owner) {
+    return { ok: false, reason: `owner mismatch: expected ${run.owner}` };
+  }
+  if (!['complete', 'fail'].includes(raw.disposition)) {
+    return { ok: false, reason: 'disposition must be complete or fail' };
+  }
+  if (raw.disposition === 'complete' && raw.nextStatus && !['ready_for_verification', 'ready_for_review', 'done'].includes(raw.nextStatus)) {
+    return { ok: false, reason: `invalid nextStatus: ${raw.nextStatus}` };
+  }
+  if (raw.disposition === 'fail' && typeof raw.reason !== 'string' && typeof raw.note !== 'string') {
+    return { ok: false, reason: 'failed handoff requires reason or note' };
+  }
+  if (raw.disposition === 'complete' && typeof raw.note !== 'string') {
+    return { ok: false, reason: 'complete handoff requires note' };
+  }
+  if (raw.artifacts !== undefined && !Array.isArray(raw.artifacts)) {
+    return { ok: false, reason: 'artifacts must be an array when provided' };
+  }
+
+  return {
+    ok: true,
+    value: {
+      disposition: raw.disposition,
+      nextStatus: raw.nextStatus || defaultNextStatusForRole(run.role),
+      note: raw.note || raw.reason || '',
+      reason: raw.reason || raw.note || '',
+      artifacts: Array.isArray(raw.artifacts)
+        ? raw.artifacts.map((artifact) => String(artifact).trim()).filter(Boolean)
+        : [],
+    },
+  };
+}
+
+function isTaskStillLeasedToRun(task, run) {
+  return Boolean(
+    task?.lease &&
+    task.lease.owner === run.owner &&
+    task.lease.role === run.role,
+  );
+}
+
+function completeLease({ taskId, role, owner, note, nextStatus, artifacts }) {
+  const commandArgs = ['complete', '--task', taskId, '--role', role, '--owner', owner, '--note', note];
+  if (nextStatus) {
+    commandArgs.push('--next-status', nextStatus);
+  }
+  if (artifacts?.length) {
+    commandArgs.push('--artifacts', artifacts.join(','));
+  }
+  const result = runControlPlane(commandArgs);
+  if (result.stdout.trim()) {
+    process.stdout.write(result.stdout);
+    if (!result.stdout.endsWith('\n')) {
+      process.stdout.write('\n');
+    }
+  }
+}
+
+function failLease({ taskId, role, owner, reason }) {
   const result = runControlPlane([
     'fail',
     '--task',
@@ -178,6 +354,16 @@ function failLease({ taskId, role, owner, exitCode, signal }) {
       process.stdout.write('\n');
     }
   }
+}
+
+function defaultNextStatusForRole(role) {
+  if (role === 'reviewer') {
+    return 'done';
+  }
+  if (role === 'verifier') {
+    return 'ready_for_review';
+  }
+  return 'ready_for_verification';
 }
 
 function readStatusSummary() {
@@ -315,5 +501,5 @@ function findRepoRoot(startDir) {
 }
 
 function printHelp() {
-  console.log(`Heavy harness supervisor loop\n\nUsage:\n  node .harness/bin/supervisor-loop.mjs [--roles reviewer,verifier,implementer] [--owner NAME] [--lane NAME]\n\nOptions:\n  --roles ROLE1,ROLE2,ROLE3  Role priority order. Default drains reviewer -> verifier -> implementer.\n  --owner NAME               Lease owner recorded in queue state. Default: claude-supervisor.\n  --lane NAME                Restrict leasing to one lane.\n  --ttl-min N                Override lease TTL in minutes.\n  --model MODEL              Pass through Claude model override.\n  --max-rounds N             Stop after N leasing attempts. 0 means unbounded.\n  --sleep-ms N               Idle polling interval in milliseconds. Default: 15000.\n  --stop-when-idle           Exit as soon as no task can be leased.`);
+  console.log(`Heavy harness supervisor loop\n\nUsage:\n  node .harness/bin/supervisor-loop.mjs [--roles reviewer,verifier,implementer] [--owner NAME] [--lane NAME]\n\nOptions:\n  --roles ROLE1,ROLE2,ROLE3  Role priority order. Default drains reviewer -> verifier -> implementer.\n  --owner NAME               Lease owner recorded in queue state. Default: claude-supervisor.\n  --lane NAME                Restrict leasing to one lane.\n  --ttl-min N                Override lease TTL in minutes.\n  --model MODEL              Pass through Claude model override.\n  --max-rounds N             Stop after N leasing attempts. 0 means unbounded.\n  --sleep-ms N               Idle polling interval in milliseconds. Default: 15000.\n  --stop-when-idle           Exit as soon as no task can be leased.\n\nAuto-close:\n  Successful runs are only auto-closed when the child agent writes a valid result.json handoff file in the run directory.`);
 }
