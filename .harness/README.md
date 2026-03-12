@@ -73,6 +73,8 @@ Run the long-lived heavy supervisor loop:
 ```bash
 npm run harness:watch
 npm run harness:drain
+npm run harness:autopilot
+npm run harness:settle
 npm run harness:supervise-loop -- --roles implementer,verifier,reviewer --owner claude-local --max-rounds 3
 ```
 
@@ -91,8 +93,10 @@ npm run harness -- fail --task FT-001 --role implementer --owner claude-local --
 - Each round leases the first available task for the highest-priority role, prepares a prompt pack, appends a `result.json` handoff contract, runs Claude, and records `run.started` / `run.finished` or `run.errored` ledger entries.
 - If Claude exits non-zero, the supervisor immediately calls `fail` for the leased task so the queue does not sit on an expired lease.
 - If Claude exits zero and the child agent wrote a valid `result.json`, the supervisor auto-applies `complete` or `fail` based on that handoff.
-- If Claude exits zero but the handoff file is missing or invalid, the supervisor warns and preserves the lease so the operator can inspect the captured run log.
+- If Claude exits zero but the handoff file is missing or invalid, the supervisor treats that as a failed unattended run and automatically requeues or blocks the task.
+- In unattended mode, manual gates are treated as best-effort evidence: the verifier and reviewer must call out anything they could not observe directly, but the loop still decides `complete` or `fail` without waiting for a human.
 - `harness:watch` keeps polling forever; `harness:drain` exits as soon as nothing can be leased.
+- `harness:autopilot` and `harness:settle` are friendlier aliases for the same fully chained loop.
 
 ## Operational Rules
 

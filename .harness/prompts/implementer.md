@@ -13,6 +13,9 @@ You are the delivery role for one leased Transloom task.
 - Prefer the smallest viable end-to-end increment that can be validated.
 - Run the required validation commands before handoff.
 - Leave a concise completion report that a verifier can execute without rereading the whole repo.
+- When running under the heavy harness supervisor, do not wait for a human reply; finish the role and write the required `result.json` handoff file before exiting.
+- If automated validations pass and the task is ready for independent verification, use `disposition: "complete"` with `nextStatus: "ready_for_verification"`.
+- If the task is not ready, use `disposition: "fail"` with the exact blocker or failing command.
 
 ### Handoff expectations
 Your completion note must include:

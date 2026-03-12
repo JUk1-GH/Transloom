@@ -11,6 +11,7 @@ const EVENTS_PATH = path.join(STATE_DIR, 'events.jsonl');
 const RUN_LEDGER_PATH = path.join(STATE_DIR, 'runs.jsonl');
 const DEFAULT_OWNER = 'claude-supervisor';
 const DEFAULT_ROLES = ['reviewer', 'verifier', 'implementer'];
+const HISTORY_EVENT_LIMIT = 6;
 
 main();
 
@@ -59,6 +60,7 @@ function main() {
     console.log(`[${nowIso()}] leased ${leasedTask.id} as ${role}`);
     let run = prepareRun({ taskId: leasedTask.id, role, owner, model });
     run = attachResultContract(run);
+    run = attachAutomationContext(run, leasedTask);
     console.log(`[${nowIso()}] prepared ${run.runId}`);
     const result = executePreparedRun(run);
 
@@ -124,20 +126,23 @@ function attachResultContract(run) {
   return { ...run, resultPath };
 }
 
+function attachAutomationContext(run, task) {
+  fs.appendFileSync(run.promptPath, buildAutomationContext(task, run));
+  return run;
+}
+
 function buildResultContract(run, resultPath) {
   const example = {
     taskId: run.taskId,
     role: run.role,
     owner: run.owner,
-    disposition: run.role === 'implementer' ? 'complete' : 'complete',
-    note: run.role === 'implementer'
-      ? 'Implemented the slice, automated validations passed, pending manual desktop smoke in verification.'
-      : 'Role handoff complete.',
+    disposition: 'complete',
+    note: roleSuccessNote(run.role),
     nextStatus: defaultNextStatusForRole(run.role),
     artifacts: [],
   };
 
-  return `\n\n## Supervisor Handoff Contract\n- Before exiting, write JSON to \`${resultPath}\`.\n- If you successfully finish your role, set \`disposition\` to \`complete\` and choose the appropriate \`nextStatus\`.\n- If work is blocked or validations fail, set \`disposition\` to \`fail\` and include a short \`reason\`.\n- If automated validations passed but manual desktop smoke is still pending, an implementer should use \`nextStatus: \"ready_for_verification\"\`.\n- Do not exit without writing this file. The supervisor uses it to close the lease safely.\n\nJSON example:\n\`\`\`json\n${JSON.stringify(example, null, 2)}\n\`\`\`\n\nFailure example:\n\`\`\`json\n${JSON.stringify({
+  return `\n\n## Supervisor Handoff Contract\n- Before exiting, write JSON to \`${resultPath}\`.\n- If you successfully finish your role, set \`disposition\` to \`complete\` and set \`nextStatus\` to \`${defaultNextStatusForRole(run.role)}\`.\n- If work is blocked, validations fail, or you cannot produce a safe handoff, set \`disposition\` to \`fail\` and include a short \`reason\`.\n- Missing or invalid \`result.json\` is treated as a failed unattended run and the supervisor will requeue or block the task automatically.\n- Do not ask a human for approval. Use the repo state, task history, validations, and current diff to decide.\n\nJSON example:\n\`\`\`json\n${JSON.stringify(example, null, 2)}\n\`\`\`\n\nFailure example:\n\`\`\`json\n${JSON.stringify({
     taskId: run.taskId,
     role: run.role,
     owner: run.owner,
@@ -145,6 +150,14 @@ function buildResultContract(run, resultPath) {
     reason: 'npm run build:desktop still fails',
     artifacts: [],
   }, null, 2)}\n\`\`\`\n`;
+}
+
+function buildAutomationContext(task, run) {
+  const historyLines = formatTaskHistory(task);
+  const manualGateLines = formatManualGates(task);
+  const roleChecklist = buildRoleChecklist(run.role);
+
+  return `\n## Unattended Loop Policy\n- You are running inside a fully unattended supervisor loop.\n- Do not wait for human replies, approvals, or manual lease updates.\n- Use the current repository state, task history, validation outputs, and git diff as your evidence.\n- Manual gates are best-effort in unattended mode: execute them when possible; if they cannot be run from this environment, say that clearly in your \`note\` and still choose \`complete\` or \`fail\` based on the best available evidence.\n- A successful unattended handoff must end with a valid \`result.json\` file.\n\n## Role Checklist\n${roleChecklist}\n\n## Recent Task History\n${historyLines}\n\n## Manual Gates For This Task\n${manualGateLines}\n`;
 }
 
 function executePreparedRun(run) {
@@ -209,29 +222,25 @@ function finalizeSuccessfulRun(run) {
 
   const handoffFile = readHandoffFile(run.resultPath);
   if (!handoffFile.ok) {
-    appendJsonl(EVENTS_PATH, {
-      at: nowIso(),
-      type: 'run.handoff.missing',
+    recordHandoffFailure(run, 'run.handoff.missing', handoffFile.reason);
+    failLease({
       taskId: run.taskId,
       role: run.role,
       owner: run.owner,
-      note: handoffFile.reason,
+      reason: `successful run missing handoff: ${handoffFile.reason}`,
     });
-    console.log(`[${nowIso()}] warning: ${run.taskId} is still leased after a successful run (${handoffFile.reason})`);
     return;
   }
 
   const validation = validateHandoff(handoffFile.value, run);
   if (!validation.ok) {
-    appendJsonl(EVENTS_PATH, {
-      at: nowIso(),
-      type: 'run.handoff.invalid',
+    recordHandoffFailure(run, 'run.handoff.invalid', validation.reason);
+    failLease({
       taskId: run.taskId,
       role: run.role,
       owner: run.owner,
-      note: validation.reason,
+      reason: `successful run produced invalid handoff: ${validation.reason}`,
     });
-    console.log(`[${nowIso()}] warning: invalid handoff for ${run.taskId} (${validation.reason})`);
     return;
   }
 
@@ -254,6 +263,18 @@ function finalizeSuccessfulRun(run) {
     nextStatus: handoff.nextStatus,
     artifacts: handoff.artifacts,
   });
+}
+
+function recordHandoffFailure(run, type, reason) {
+  appendJsonl(EVENTS_PATH, {
+    at: nowIso(),
+    type,
+    taskId: run.taskId,
+    role: run.role,
+    owner: run.owner,
+    note: reason,
+  });
+  console.log(`[${nowIso()}] warning: ${reason}; auto-failing ${run.taskId}`);
 }
 
 function readHandoffFile(resultPath) {
@@ -284,7 +305,7 @@ function validateHandoff(raw, run) {
   if (!['complete', 'fail'].includes(raw.disposition)) {
     return { ok: false, reason: 'disposition must be complete or fail' };
   }
-  if (raw.disposition === 'complete' && raw.nextStatus && !['ready_for_verification', 'ready_for_review', 'done'].includes(raw.nextStatus)) {
+  if (raw.disposition === 'complete' && raw.nextStatus && !allowedNextStatusesForRole(run.role).includes(raw.nextStatus)) {
     return { ok: false, reason: `invalid nextStatus: ${raw.nextStatus}` };
   }
   if (raw.disposition === 'fail' && typeof raw.reason !== 'string' && typeof raw.note !== 'string') {
@@ -364,6 +385,81 @@ function defaultNextStatusForRole(role) {
     return 'ready_for_review';
   }
   return 'ready_for_verification';
+}
+
+function allowedNextStatusesForRole(role) {
+  if (role === 'reviewer') {
+    return ['done'];
+  }
+  if (role === 'verifier') {
+    return ['ready_for_review'];
+  }
+  return ['ready_for_verification'];
+}
+
+function roleSuccessNote(role) {
+  if (role === 'reviewer') {
+    return 'Reviewed the task, verified the evidence, and approved it for done.';
+  }
+  if (role === 'verifier') {
+    return 'Re-ran validations, checked the scope, and approved the task for final review.';
+  }
+  return 'Implemented the slice, ran the required automated validations, and handed off to verification.';
+}
+
+function buildRoleChecklist(role) {
+  if (role === 'reviewer') {
+    return [
+      '- Review the verifier evidence, current diff, and resulting repo state.',
+      '- Confirm the task scope matches the objective and no obvious cleanup is missing.',
+      '- Write `result.json` with `disposition: "complete"` and `nextStatus: "done"` only when the task is genuinely ready to close.',
+      '- Otherwise write `disposition: "fail"` with the smallest corrective next step.',
+    ].join('\n');
+  }
+
+  if (role === 'verifier') {
+    return [
+      '- Re-run the required validation commands from the task pack.',
+      '- Exercise manual gates when possible from this environment.',
+      '- If a manual gate cannot be run unattended, say that explicitly in the `note` instead of waiting for a human.',
+      '- Write `result.json` with `disposition: "complete"` and `nextStatus: "ready_for_review"` only when the evidence is strong enough.',
+    ].join('\n');
+  }
+
+  return [
+    '- Implement the smallest viable slice that satisfies the task objective.',
+    '- Run the required automated validations before handoff.',
+    '- Use `disposition: "complete"` only when the task is ready for independent verification.',
+    '- If the implementation is not ready, write `disposition: "fail"` with the exact failing command or blocker.',
+  ].join('\n');
+}
+
+function formatTaskHistory(task) {
+  const history = Array.isArray(task?.history) ? task.history.slice(-HISTORY_EVENT_LIMIT) : [];
+  if (!history.length) {
+    return '- no prior history';
+  }
+
+  return history.map((entry) => {
+    const details = [
+      entry.event,
+      entry.owner ? `owner=${entry.owner}` : null,
+      entry.role ? `role=${entry.role}` : null,
+      entry.nextStatus ? `next=${entry.nextStatus}` : null,
+      entry.reason ? `reason=${entry.reason}` : null,
+      entry.note ? `note=${entry.note}` : null,
+    ].filter(Boolean).join(' | ');
+    return `- ${entry.at || 'unknown time'} :: ${details}`;
+  }).join('\n');
+}
+
+function formatManualGates(task) {
+  const manual = Array.isArray(task?.validation?.manual) ? task.validation.manual : [];
+  if (!manual.length) {
+    return '- none';
+  }
+
+  return manual.map((gate) => `- ${gate}`).join('\n');
 }
 
 function readStatusSummary() {
@@ -501,5 +597,5 @@ function findRepoRoot(startDir) {
 }
 
 function printHelp() {
-  console.log(`Heavy harness supervisor loop\n\nUsage:\n  node .harness/bin/supervisor-loop.mjs [--roles reviewer,verifier,implementer] [--owner NAME] [--lane NAME]\n\nOptions:\n  --roles ROLE1,ROLE2,ROLE3  Role priority order. Default drains reviewer -> verifier -> implementer.\n  --owner NAME               Lease owner recorded in queue state. Default: claude-supervisor.\n  --lane NAME                Restrict leasing to one lane.\n  --ttl-min N                Override lease TTL in minutes.\n  --model MODEL              Pass through Claude model override.\n  --max-rounds N             Stop after N leasing attempts. 0 means unbounded.\n  --sleep-ms N               Idle polling interval in milliseconds. Default: 15000.\n  --stop-when-idle           Exit as soon as no task can be leased.\n\nAuto-close:\n  Successful runs are only auto-closed when the child agent writes a valid result.json handoff file in the run directory.`);
+  console.log(`Heavy harness supervisor loop\n\nUsage:\n  node .harness/bin/supervisor-loop.mjs [--roles reviewer,verifier,implementer] [--owner NAME] [--lane NAME]\n\nOptions:\n  --roles ROLE1,ROLE2,ROLE3  Role priority order. Default drains reviewer -> verifier -> implementer.\n  --owner NAME               Lease owner recorded in queue state. Default: claude-supervisor.\n  --lane NAME                Restrict leasing to one lane.\n  --ttl-min N                Override lease TTL in minutes.\n  --model MODEL              Pass through Claude model override.\n  --max-rounds N             Stop after N leasing attempts. 0 means unbounded.\n  --sleep-ms N               Idle polling interval in milliseconds. Default: 15000.\n  --stop-when-idle           Exit as soon as no task can be leased.\n\nAuto-close:\n  Successful runs auto-close only from a valid result.json handoff.\n  Missing or invalid handoffs are treated as failed unattended runs and are requeued or blocked automatically.`);
 }

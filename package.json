@@ -29,6 +29,8 @@
     "harness:doctor": "node .harness/bin/control-plane.mjs doctor",
     "harness:status": "node .harness/bin/control-plane.mjs status",
     "harness:supervise": "node .harness/bin/control-plane.mjs supervise-once",
+    "harness:autopilot": "node .harness/bin/supervisor-loop.mjs --roles reviewer,verifier,implementer",
+    "harness:settle": "node .harness/bin/supervisor-loop.mjs --roles reviewer,verifier,implementer --stop-when-idle",
     "harness:supervise-loop": "node .harness/bin/supervisor-loop.mjs",
     "harness:watch": "node .harness/bin/supervisor-loop.mjs --roles reviewer,verifier,implementer",
     "harness:drain": "node .harness/bin/supervisor-loop.mjs --roles reviewer,verifier,implementer --stop-when-idle"
