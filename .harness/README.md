@@ -12,6 +12,7 @@ This directory is a repo-local control plane for long-running Claude development
 ## Layout
 
 - `.harness/bin/control-plane.mjs` — CLI for bootstrap, queue leasing, dispatch, and status.
+- `.harness/bin/supervisor-loop.mjs` — long-running supervisor that keeps dispatching Claude across role queues.
 - `.harness/config/policies.json` — tracked scheduler, role, retry, and validation policy.
 - `.harness/prompts/*.md` — role-specific prompt preambles used to build prompt packs.
 - `.harness/state/tasks.json` — mutable queue state generated from `feature_list.json`.
@@ -67,6 +68,14 @@ npm run harness:supervise -- --role implementer --owner claude-local
 npm run harness:supervise -- --role implementer --owner claude-local --exec
 ```
 
+Run the long-lived heavy supervisor loop:
+
+```bash
+npm run harness:watch
+npm run harness:drain
+npm run harness:supervise-loop -- --roles implementer,verifier,reviewer --owner claude-local --max-rounds 3
+```
+
 Record progress from the role that owns the lease:
 
 ```bash
@@ -74,6 +83,15 @@ npm run harness -- heartbeat --task FT-001 --owner claude-local
 npm run harness -- complete --task FT-001 --role implementer --owner claude-local --note "lint/typecheck/test passed"
 npm run harness -- fail --task FT-001 --role implementer --owner claude-local --reason "build:desktop still fails"
 ```
+
+## Supervisor Loop Behavior
+
+- `supervisor-loop.mjs` is additive. It does not replace the existing control-plane commands.
+- The loop defaults to `reviewer,verifier,implementer` priority so already-in-flight work drains before new implementation starts.
+- Each round leases the first available task for the highest-priority role, prepares a prompt pack, runs Claude, and records `run.started` / `run.finished` or `run.errored` ledger entries.
+- If Claude exits non-zero, the supervisor immediately calls `fail` for the leased task so the queue does not sit on an expired lease.
+- If Claude exits zero but leaves the task leased, the supervisor warns and preserves the lease so the operator can inspect the captured run log.
+- `harness:watch` keeps polling forever; `harness:drain` exits as soon as nothing can be leased.
 
 ## Operational Rules
 

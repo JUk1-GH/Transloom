@@ -28,7 +28,10 @@
     "harness:bootstrap": "node .harness/bin/control-plane.mjs bootstrap",
     "harness:doctor": "node .harness/bin/control-plane.mjs doctor",
     "harness:status": "node .harness/bin/control-plane.mjs status",
-    "harness:supervise": "node .harness/bin/control-plane.mjs supervise-once"
+    "harness:supervise": "node .harness/bin/control-plane.mjs supervise-once",
+    "harness:supervise-loop": "node .harness/bin/supervisor-loop.mjs",
+    "harness:watch": "node .harness/bin/supervisor-loop.mjs --roles reviewer,verifier,implementer",
+    "harness:drain": "node .harness/bin/supervisor-loop.mjs --roles reviewer,verifier,implementer --stop-when-idle"
   },
   "dependencies": {
     "@next/swc-darwin-arm64": "^16.1.6",
