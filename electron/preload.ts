@@ -26,6 +26,7 @@ const settingsChannels = {
   workspaceDraftUpdated: 'workspace:draft-updated',
   captureCompleted: 'capture:completed',
   captureCancelled: 'capture:cancelled',
+  captureWindowClosed: 'capture:window-closed',
 } as const;
 
 contextBridge.exposeInMainWorld('transloomDesktop', {
@@ -59,6 +60,11 @@ contextBridge.exposeInMainWorld('transloomDesktop', {
     const listener = (_event: unknown, payload: { filePath: null; message?: string }) => callback(payload);
     ipcRenderer.on(settingsChannels.captureCancelled, listener);
     return () => ipcRenderer.removeListener(settingsChannels.captureCancelled, listener);
+  },
+  onCaptureWindowClosed: (callback: (payload: { reason: 'closed' | 'blurred'; message?: string }) => void) => {
+    const listener = (_event: unknown, payload: { reason: 'closed' | 'blurred'; message?: string }) => callback(payload);
+    ipcRenderer.on(settingsChannels.captureWindowClosed, listener);
+    return () => ipcRenderer.removeListener(settingsChannels.captureWindowClosed, listener);
   },
   onPopupStateUpdated: (callback: (payload: unknown) => void) => {
     const listener = (_event: unknown, payload: unknown) => callback(payload);

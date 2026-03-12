@@ -147,6 +147,23 @@ async function getDesktopSettings() {
   };
 }
 
+function notifyCaptureWindowClosed(reason: 'closed' | 'blurred', message?: string) {
+  const payload = { reason, message };
+  const captureWindow = windowManager.getCaptureWindow();
+  const mainWindow = windowManager.getMainWindow();
+
+  if (captureWindow && !captureWindow.isDestroyed()) {
+    captureWindow.webContents.send(settingsChannels.captureWindowClosed, payload);
+  }
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send(settingsChannels.captureWindowClosed, payload);
+  }
+}
+
+function clearLatestCapture() {
+  latestCapture = null;
+}
+
 function createMainWindow(rendererUrl: string) {
   const mainWindow = new BrowserWindow({
     width: 1440,
@@ -268,6 +285,9 @@ app.whenReady().then(async () => {
   await ensureLocalDatabase();
   const rendererUrl = await getRendererUrl();
   windowManager.setRendererBaseUrl(rendererUrl);
+  windowManager.onCaptureWindowClosed((reason) => {
+    notifyCaptureWindowClosed(reason, reason === 'blurred' ? '截图窗口失焦，已结束本次框选。' : '截图窗口已关闭。');
+  });
 
   createMainWindow(rendererUrl);
 
@@ -344,7 +364,19 @@ app.whenReady().then(async () => {
   ipcMain.handle(settingsChannels.hidePopupWindow, () => windowManager.hidePopupWindow());
   ipcMain.handle(settingsChannels.showPopupWindow, () => windowManager.showPopupWindow());
   ipcMain.handle(settingsChannels.showCaptureWindow, () => windowManager.showCaptureWindow());
-  ipcMain.handle(settingsChannels.getLatestCapture, () => latestCapture);
+  ipcMain.handle(settingsChannels.getLatestCapture, async () => {
+    if (!latestCapture?.filePath) {
+      return null;
+    }
+
+    try {
+      await access(latestCapture.filePath);
+      return latestCapture;
+    } catch {
+      clearLatestCapture();
+      return null;
+    }
+  });
   ipcMain.handle(settingsChannels.getPopupState, () => popupStateService.getState());
   ipcMain.handle(settingsChannels.getWorkspaceDraft, () => workspaceDraftService.getDraft());
   ipcMain.handle(settingsChannels.promotePopupToWorkspace, () => {
@@ -368,6 +400,7 @@ app.whenReady().then(async () => {
   ipcMain.handle(settingsChannels.cancelCaptureSelection, () => {
     windowManager.hideCaptureWindow();
     windowManager.getCaptureWindow()?.webContents.send(settingsChannels.captureCancelled, { filePath: null, message: '截图已取消。' });
+    notifyCaptureWindowClosed('closed', '截图窗口已关闭。');
     return { visible: false };
   });
   ipcMain.handle(settingsChannels.submitCaptureSelection, async (_event, payload: CaptureSelectionPayload) => {
@@ -384,6 +417,7 @@ app.whenReady().then(async () => {
     }
 
     windowManager.hideCaptureWindow();
+    notifyCaptureWindowClosed('closed', '截图窗口已完成并关闭。');
     windowManager.showMainWindow();
     return result;
   });

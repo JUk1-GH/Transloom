@@ -5,6 +5,11 @@ export function createWindowManager(preloadPath: string) {
   let mainWindow: BrowserWindow | null = null;
   let captureWindow: BrowserWindow | null = null;
   let popupWindow: BrowserWindow | null = null;
+  let captureWindowCloseListener: ((reason: 'closed' | 'blurred') => void) | null = null;
+
+  function emitCaptureWindowClosed(reason: 'closed' | 'blurred') {
+    captureWindowCloseListener?.(reason);
+  }
 
   function createCaptureWindow() {
     const primaryDisplay = screen.getPrimaryDisplay();
@@ -29,8 +34,16 @@ export function createWindowManager(preloadPath: string) {
       },
     });
 
+    captureWindow.on('blur', () => {
+      if (captureWindow && !captureWindow.isDestroyed() && captureWindow.isVisible()) {
+        captureWindow.hide();
+        emitCaptureWindowClosed('blurred');
+      }
+    });
+
     captureWindow.on('closed', () => {
       captureWindow = null;
+      emitCaptureWindowClosed('closed');
     });
 
     void captureWindow.loadURL(`${rendererBaseUrl}/capture?mode=overlay`);
@@ -69,6 +82,9 @@ export function createWindowManager(preloadPath: string) {
   return {
     setRendererBaseUrl(url: string) {
       rendererBaseUrl = url;
+    },
+    onCaptureWindowClosed(listener: (reason: 'closed' | 'blurred') => void) {
+      captureWindowCloseListener = listener;
     },
     attachMainWindow(window: BrowserWindow) {
       mainWindow = window;

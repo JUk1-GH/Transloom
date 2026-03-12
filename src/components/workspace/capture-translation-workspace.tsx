@@ -62,6 +62,8 @@ export function CaptureTranslationWorkspace({
   const [overlay, setOverlay] = useState<OverlayDocument | null>(null);
   const [message, setMessage] = useState('点击“打开框选窗口”开始截图。');
   const [latestCapturePath, setLatestCapturePath] = useState<string | null>(null);
+  const [recentCaptureIssue, setRecentCaptureIssue] = useState<string | null>(null);
+  const [captureWindowState, setCaptureWindowState] = useState<'idle' | 'open'>('idle');
   const [targetLang, setTargetLang] = useState('zh-CN');
   const [isTranslating, setIsTranslating] = useState(false);
   const [isBootstrapping, setIsBootstrapping] = useState(true);
@@ -72,7 +74,9 @@ export function CaptureTranslationWorkspace({
       ? '正在读取桌面运行时与最近截图状态，请稍候。'
       : !capabilities?.screenRecording?.granted
         ? '尚未获得“屏幕录制”权限，因此不能打开框选窗口。'
-        : null;
+        : isTranslating
+          ? '当前正在处理截图翻译，请等待本轮完成。'
+          : null;
   const captureButtonLabel = captureDisabledReason ? '打开框选窗口（暂不可用）' : '打开框选窗口';
 
   useEffect(() => {
@@ -98,6 +102,10 @@ export function CaptureTranslationWorkspace({
           }
           if (latestCapture?.filePath) {
             setLatestCapturePath(latestCapture.filePath);
+            setRecentCaptureIssue(null);
+          } else {
+            setLatestCapturePath(null);
+            setRecentCaptureIssue('最近截图不可用，可能已被移动、删除或尚未完成捕获。');
           }
         } else {
           const nextRuntime = await fetch('/api/provider-runtime', { cache: 'no-store' }).then((response) => response.json());
@@ -125,6 +133,7 @@ export function CaptureTranslationWorkspace({
 
   const runCaptureTranslation = useCallback(async (imagePath: string) => {
     setLatestCapturePath(imagePath);
+    setRecentCaptureIssue(null);
     setOverlay(null);
     setIsTranslating(true);
     setMessage('正在执行 OCR 与翻译...');
@@ -148,6 +157,10 @@ export function CaptureTranslationWorkspace({
 
       const payload = await response.json();
       if (!response.ok) {
+        if (payload.code === 'SCREENSHOT_FILE_NOT_FOUND') {
+          setLatestCapturePath(null);
+          setRecentCaptureIssue(payload.message ?? '最近截图已失效，请重新截图。');
+        }
         setMessage(payload.message ?? payload.code ?? '截屏翻译失败。');
         return;
       }
@@ -166,22 +179,40 @@ export function CaptureTranslationWorkspace({
       return;
     }
     const disposeCompleted = desktopClient.onCaptureCompleted((payload) => {
+      setCaptureWindowState('idle');
       setMessage(`已接收截图：${payload.filePath}`);
+      setRecentCaptureIssue(null);
       void runCaptureTranslation(payload.filePath);
     });
     const disposeCancelled = desktopClient.onCaptureCancelled((payload) => {
+      setCaptureWindowState('idle');
       setMessage(payload.message ?? '截图已取消，未写入历史。');
       setIsTranslating(false);
+    });
+    const disposeClosed = desktopClient.onCaptureWindowClosed((payload) => {
+      setCaptureWindowState('idle');
+      if (!isTranslating) {
+        setMessage(payload.message ?? '截图窗口已关闭。');
+      }
     });
     return () => {
       disposeCompleted();
       disposeCancelled();
+      disposeClosed();
     };
-  }, [desktopAvailable, runCaptureTranslation]);
+  }, [desktopAvailable, isTranslating, runCaptureTranslation]);
 
   function handlePreviewMockOverlay() {
     setOverlay(mockOverlay);
+    setRecentCaptureIssue(null);
     setMessage('当前为浏览器预览，已加载内置 mock overlay。');
+  }
+
+  async function handleOpenCaptureWindow() {
+    setCaptureWindowState('open');
+    setRecentCaptureIssue(null);
+    setMessage('框选窗口已打开，请拖拽选择屏幕区域。');
+    await desktopClient.showCaptureWindow();
   }
 
   const overlayEmptyState = overlay
@@ -196,7 +227,12 @@ export function CaptureTranslationWorkspace({
             title: '等待重新生成结果',
             detail: '已记录最近截图，但当前尚未拿到新的 overlay 输出。你可以重新发起翻译。',
           }
-        : !desktopAvailable
+        : recentCaptureIssue
+          ? {
+              title: '最近截图不可恢复',
+              detail: `${recentCaptureIssue} 请重新打开框选窗口获取新的截图。`,
+            }
+          : !desktopAvailable
           ? {
               title: '浏览器预览模式',
               detail: '当前无法进行系统级截图；可以先点击“预览 Mock Overlay”查看覆盖层效果。',
@@ -214,9 +250,11 @@ export function CaptureTranslationWorkspace({
             <div className='rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-3'>环境：{desktopAvailable ? 'Electron desktop' : 'Browser preview'}</div>
             <div className='rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-3'>模式：{isBootstrapping ? '读取中...' : runtime?.runtimeMode === 'real' ? 'Real' : 'Mock'}</div>
             <div className='rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-3'>目标语言：{languageLabels[targetLang] ?? targetLang}</div>
+            <div className='rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-3'>截图窗口：{captureWindowState === 'open' ? '已打开，等待框选' : '空闲'}</div>
             <div className='rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-3'>{message}</div>
-            <Button onClick={() => void desktopClient.showCaptureWindow()} disabled={Boolean(captureDisabledReason)} className='w-full justify-center'>{captureButtonLabel}</Button>
+            <Button onClick={() => void handleOpenCaptureWindow()} disabled={Boolean(captureDisabledReason)} className='w-full justify-center'>{captureButtonLabel}</Button>
             {captureDisabledReason ? <div className='rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-3 text-sm text-amber-800'>{captureDisabledReason}</div> : null}
+            {recentCaptureIssue ? <div className='rounded-xl border border-rose-200 bg-rose-50 px-3.5 py-3 text-sm text-rose-700'>{recentCaptureIssue}</div> : null}
             <Button variant='secondary' onClick={() => latestCapturePath && void runCaptureTranslation(latestCapturePath)} disabled={!latestCapturePath || isTranslating} className='w-full justify-center'>重新翻译最近截图</Button>
             {!desktopAvailable ? <Button variant='secondary' onClick={handlePreviewMockOverlay} className='w-full justify-center'>预览 Mock Overlay</Button> : null}
             <Link href='/settings' className='flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-3 text-sm font-medium text-slate-700 transition hover:border-violet-300 hover:text-violet-700'><span>回到设置页</span><span>→</span></Link>

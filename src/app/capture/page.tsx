@@ -75,7 +75,15 @@ function CaptureOverlayMode() {
       setIsSubmitting(false);
       setSelection(null);
     });
-    return () => disposeCancelled();
+    const disposeClosed = desktopClient.onCaptureWindowClosed((payload) => {
+      setMessage(payload.message ?? '截图窗口已关闭。');
+      setIsSubmitting(false);
+      setSelection(null);
+    });
+    return () => {
+      disposeCancelled();
+      disposeClosed();
+    };
   }, []);
 
   const selectionBox = selection ? {

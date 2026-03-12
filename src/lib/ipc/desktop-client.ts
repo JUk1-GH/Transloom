@@ -115,6 +115,7 @@ declare global {
       promotePopupToWorkspace: () => Promise<WorkspaceDraftState | null>;
       onCaptureCompleted: (callback: (payload: { filePath: string; capturedAt: string }) => void) => () => void;
       onCaptureCancelled: (callback: (payload: { filePath: null; message?: string }) => void) => () => void;
+      onCaptureWindowClosed: (callback: (payload: { reason: 'closed' | 'blurred'; message?: string }) => void) => () => void;
       onPopupStateUpdated: (callback: (payload: PopupTranslationState) => void) => () => void;
       onWorkspaceDraftUpdated: (callback: (payload: WorkspaceDraftState) => void) => () => void;
     };
@@ -193,6 +194,9 @@ export const desktopClient = {
   },
   onCaptureCancelled(callback: (payload: { filePath: null; message?: string }) => void) {
     return window.transloomDesktop?.onCaptureCancelled(callback) ?? (() => undefined);
+  },
+  onCaptureWindowClosed(callback: (payload: { reason: 'closed' | 'blurred'; message?: string }) => void) {
+    return window.transloomDesktop?.onCaptureWindowClosed(callback) ?? (() => undefined);
   },
   onPopupStateUpdated(callback: (payload: PopupTranslationState) => void) {
     return window.transloomDesktop?.onPopupStateUpdated(callback) ?? (() => undefined);

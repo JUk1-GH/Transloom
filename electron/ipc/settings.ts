@@ -24,4 +24,5 @@ export const settingsChannels = {
   workspaceDraftUpdated: 'workspace:draft-updated',
   captureCompleted: 'capture:completed',
   captureCancelled: 'capture:cancelled',
+  captureWindowClosed: 'capture:window-closed',
 } as const;
