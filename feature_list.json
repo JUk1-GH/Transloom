@@ -133,5 +133,30 @@
       "src/components/ui/textarea.tsx"
     ],
     "nextStep": "把首页、主翻译工作区与共享 shell 改造成接近 DeepL for Mac 的桌面风格：强化双栏布局、紧凑的顶部语言切换栏、安静的状态提示、更清晰的输入输出面板层级与更原生的 macOS 细节，同时避免直接复制品牌资产。"
+  },
+  {
+    "name": "minimal-desktop-ui-rewrite",
+    "status": "partial",
+    "description": "现有界面虽然已经做过一轮 calm down，但整体依然保留了太多网页式卡片、侧栏和说明块，和用户目标中的 DeepL for Mac 极简桌面感仍有明显偏差。需要保留已打通的翻译、截图、历史、术语表与设置能力，但把前端壳层、导航结构、主工作区和辅助页面整体重写为更安静、更直接、更接近桌面工具的样子。",
+    "files": [
+      "src/app/page.tsx",
+      "src/app/translate/page.tsx",
+      "src/app/capture/page.tsx",
+      "src/app/history/page.tsx",
+      "src/app/glossary/page.tsx",
+      "src/app/settings/page.tsx",
+      "src/app/account/page.tsx",
+      "src/app/billing/page.tsx",
+      "src/app/globals.css",
+      "src/components/ui/app-shell.tsx",
+      "src/components/ui/button.tsx",
+      "src/components/ui/card.tsx",
+      "src/components/ui/input.tsx",
+      "src/components/ui/textarea.tsx",
+      "src/components/workspace/text-translation-workspace.tsx",
+      "src/components/workspace/capture-translation-workspace.tsx",
+      "src/components/desktop/permission-onboarding.tsx"
+    ],
+    "nextStep": "以前端几乎重写的方式把整个桌面应用收敛成真正极简的 DeepL for Mac 风格：深色顶部导航、浅色主工作区、几乎无装饰的双栏翻译面板、统一而克制的表单/列表样式，并同步清理截图、历史、术语表、设置、账户和账单页面上的网页化卡片堆叠。"
   }
 ]

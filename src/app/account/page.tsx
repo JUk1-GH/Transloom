@@ -1,9 +1,8 @@
-import Link from "next/link";
-import { AppShell } from "@/components/ui/app-shell";
-import { Card } from "@/components/ui/card";
-import { getGlossarySummary } from "@/server/glossary/service";
-import { getHistorySummary } from "@/server/history/service";
-import { getUsageSummary } from "@/server/usage/service";
+import Link from 'next/link';
+import { AppShell } from '@/components/ui/app-shell';
+import { getGlossarySummary } from '@/server/glossary/service';
+import { getHistorySummary } from '@/server/history/service';
+import { getUsageSummary } from '@/server/usage/service';
 
 export default async function AccountPage() {
   const [historySummary, glossarySummary, usageSummary] = await Promise.all([
@@ -13,49 +12,43 @@ export default async function AccountPage() {
   ]);
 
   return (
-    <AppShell
-      title="本地账户视图"
-      description="当前 Transloom 以本地单用户模式运行，不提供真实登录流，但仍保留一层可读的账户边界。"
-    >
-      <section className="grid gap-4 md:grid-cols-3">
-        <div className="rounded-2xl border border-slate-200 bg-white px-4 py-4 shadow-sm">
-          <p className="text-xs uppercase tracking-[0.16em] text-slate-500">Identity</p>
-          <p className="mt-2 text-lg font-semibold text-slate-900">local@transloom.app</p>
+    <AppShell title='账户' description='当前是本地单用户模式，没有真实登录链路。'>
+      <section className='grid gap-px overflow-hidden rounded-[14px] border border-[#d4d4d4] bg-[#d4d4d4] md:grid-cols-3'>
+        <div className='bg-white px-4 py-4'>
+          <div className='text-xs text-[#7a7a7a]'>身份</div>
+          <div className='mt-2 text-lg font-medium text-[#111111]'>local@transloom.app</div>
         </div>
-        <div className="rounded-2xl border border-slate-200 bg-white px-4 py-4 shadow-sm">
-          <p className="text-xs uppercase tracking-[0.16em] text-slate-500">Translation runs</p>
-          <p className="mt-2 text-2xl font-semibold text-slate-900">{historySummary.total}</p>
+        <div className='bg-white px-4 py-4'>
+          <div className='text-xs text-[#7a7a7a]'>翻译记录</div>
+          <div className='mt-2 text-2xl font-medium text-[#111111]'>{historySummary.total}</div>
         </div>
-        <div className="rounded-2xl border border-slate-200 bg-white px-4 py-4 shadow-sm">
-          <p className="text-xs uppercase tracking-[0.16em] text-slate-500">Glossary entries</p>
-          <p className="mt-2 text-2xl font-semibold text-slate-900">{glossarySummary.entries}</p>
+        <div className='bg-white px-4 py-4'>
+          <div className='text-xs text-[#7a7a7a]'>术语条目</div>
+          <div className='mt-2 text-2xl font-medium text-[#111111]'>{glossarySummary.entries}</div>
         </div>
       </section>
 
-      <section className="grid gap-5 xl:grid-cols-[minmax(0,1.2fr)_360px]">
-        <Card title="当前账户策略" eyebrow="Single User">
-          <div className="space-y-3">
-            <div className="rounded-xl border border-violet-200 bg-violet-50 px-4 py-3 text-violet-900">
-              这不是 SaaS 登录页。当前仓库通过本地默认用户承接 history、glossary、usage 等持久化数据，避免引入半成品 auth/订阅链路。
+      <section className='grid gap-4 xl:grid-cols-[minmax(0,1fr)_280px]'>
+        <section className='rounded-[14px] border border-[#d2d2d2] bg-[#f6f6f6]'>
+          <div className='border-b border-[#dddddd] px-4 py-3 text-[15px] font-medium text-[#111111]'>当前策略</div>
+          <div className='space-y-3 px-4 py-4 text-sm text-[#555555]'>
+            <div className='rounded-[10px] border border-[#d9d9d9] bg-white px-3 py-3'>
+              这不是 SaaS 登录页。账户只是本地数据的一个阅读边界。
             </div>
-            <ul className="space-y-2">
-              <li>- 历史记录：{historySummary.total} 条，最近活动 {historySummary.latestActivityAt ?? "暂无"}</li>
-              <li>- 术语表：{glossarySummary.glossaries} 个 glossary，{glossarySummary.entries} 条 entry</li>
-              <li>- 当月用量：{usageSummary.monthlyCharacters} 字符 / {usageSummary.requestCount} 次请求</li>
-            </ul>
+            <div>历史记录：{historySummary.total} 条</div>
+            <div>术语表：{glossarySummary.glossaries} 个，{glossarySummary.entries} 条条目</div>
+            <div>当月用量：{usageSummary.monthlyCharacters} 字符 / {usageSummary.requestCount} 次请求</div>
           </div>
-        </Card>
+        </section>
 
-        <Card title="下一步建议" eyebrow="Roadmap">
-          <div className="space-y-3">
-            <p>如果以后要恢复账户体系，建议只在明确需要多用户同步或云订阅时再引入最小登录态，而不是保留无效跳转。</p>
-            <div className="flex flex-wrap gap-2">
-              <Link href="/history" className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-sm font-medium text-slate-700 transition hover:border-violet-300 hover:text-violet-700">查看历史</Link>
-              <Link href="/glossary" className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-sm font-medium text-slate-700 transition hover:border-violet-300 hover:text-violet-700">查看术语表</Link>
-              <Link href="/billing" className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-sm font-medium text-slate-700 transition hover:border-violet-300 hover:text-violet-700">查看用量</Link>
-            </div>
+        <section className='rounded-[14px] border border-[#d2d2d2] bg-[#f6f6f6]'>
+          <div className='border-b border-[#dddddd] px-4 py-3 text-[15px] font-medium text-[#111111]'>快捷入口</div>
+          <div className='space-y-2 px-4 py-4 text-sm text-[#555555]'>
+            <Link href='/history' className='block rounded-[10px] border border-[#d1d1d1] bg-white px-3 py-2.5 transition hover:bg-[#fafafa]'>查看历史</Link>
+            <Link href='/glossary' className='block rounded-[10px] border border-[#d1d1d1] bg-white px-3 py-2.5 transition hover:bg-[#fafafa]'>查看术语表</Link>
+            <Link href='/billing' className='block rounded-[10px] border border-[#d1d1d1] bg-white px-3 py-2.5 transition hover:bg-[#fafafa]'>查看用量</Link>
           </div>
-        </Card>
+        </section>
       </section>
     </AppShell>
   );

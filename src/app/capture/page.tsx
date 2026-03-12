@@ -4,8 +4,8 @@ import { Suspense, useEffect, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import type { DesktopCapabilities } from '@/components/desktop/permission-onboarding';
 import { AppShell } from '@/components/ui/app-shell';
-import { desktopClient } from '@/lib/ipc/desktop-client';
 import { CaptureTranslationWorkspace } from '@/components/workspace/capture-translation-workspace';
+import { desktopClient } from '@/lib/ipc/desktop-client';
 
 type DragSelection = {
   startX: number;
@@ -31,13 +31,14 @@ function toSelectionPayload(selection: DragSelection) {
 
 function CaptureOverlayMode() {
   const [selection, setSelection] = useState<DragSelection | null>(null);
-  const [message, setMessage] = useState('拖拽选择要翻译的屏幕区域，松开鼠标后自动截图。');
+  const [message, setMessage] = useState('拖拽选择要翻译的区域，松开后自动截图。');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   function handlePointerDown(event: React.PointerEvent<HTMLDivElement>) {
     if (isSubmitting) {
       return;
     }
+
     setSelection({ startX: event.clientX, startY: event.clientY, currentX: event.clientX, currentY: event.clientY });
   }
 
@@ -45,6 +46,7 @@ function CaptureOverlayMode() {
     if (!selection) {
       return;
     }
+
     setSelection((current) => current ? { ...current, currentX: event.clientX, currentY: event.clientY } : current);
   }
 
@@ -52,14 +54,17 @@ function CaptureOverlayMode() {
     if (!selection) {
       return;
     }
+
     const payload = toSelectionPayload(selection);
     if (payload.width < 8 || payload.height < 8) {
       setSelection(null);
-      setMessage('框选区域过小，请重新拖拽。');
+      setMessage('框选区域太小，请重新拖拽。');
       return;
     }
+
     setIsSubmitting(true);
     setMessage('正在截取选定区域...');
+
     try {
       await desktopClient.submitCaptureSelection(payload);
     } catch (error) {
@@ -75,11 +80,13 @@ function CaptureOverlayMode() {
       setIsSubmitting(false);
       setSelection(null);
     });
+
     const disposeClosed = desktopClient.onCaptureWindowClosed((payload) => {
       setMessage(payload.message ?? '截图窗口已关闭。');
       setIsSubmitting(false);
       setSelection(null);
     });
+
     return () => {
       disposeCancelled();
       disposeClosed();
@@ -94,11 +101,33 @@ function CaptureOverlayMode() {
   } : null;
 
   return (
-    <main className='relative h-screen w-screen cursor-crosshair overflow-hidden bg-slate-950/20' onPointerDown={handlePointerDown} onPointerMove={handlePointerMove} onPointerUp={() => void handlePointerUp()}>
-      <div className='absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(167,139,250,0.22),transparent_28%),radial-gradient(circle_at_bottom_right,rgba(59,130,246,0.18),transparent_30%)]' />
-      <div className='absolute left-6 top-6 max-w-sm rounded-2xl border border-white/10 bg-slate-950/55 px-4 py-3 text-sm text-white/90 backdrop-blur'>{message}</div>
-      <button type='button' className='absolute right-6 top-6 rounded-xl border border-white/15 bg-slate-950/55 px-3 py-2 text-sm text-white/90 backdrop-blur transition hover:bg-slate-900/70' onClick={() => void desktopClient.cancelCaptureSelection()}>取消</button>
-      {selectionBox ? <div className='absolute border-2 border-violet-300 bg-violet-400/20 shadow-[0_0_0_9999px_rgba(2,6,23,0.55)]' style={{ left: selectionBox.left, top: selectionBox.top, width: selectionBox.width, height: selectionBox.height }} /> : <div className='absolute inset-0 shadow-[0_0_0_9999px_rgba(2,6,23,0.35)]' />}
+    <main
+      className='relative h-screen w-screen cursor-crosshair overflow-hidden bg-black/20'
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={() => void handlePointerUp()}
+    >
+      <div className='absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(255,255,255,0.16),transparent_26%),radial-gradient(circle_at_bottom_right,rgba(11,103,209,0.16),transparent_30%)]' />
+
+      <div className='absolute left-4 right-4 top-4 flex items-center justify-between gap-3 rounded-[12px] border border-white/10 bg-black/70 px-4 py-3 text-white backdrop-blur'>
+        <div className='text-sm'>{message}</div>
+        <button
+          type='button'
+          className='rounded-[10px] border border-white/20 bg-white/10 px-3 py-1.5 text-sm text-white transition hover:bg-white/16'
+          onClick={() => void desktopClient.cancelCaptureSelection()}
+        >
+          取消
+        </button>
+      </div>
+
+      {selectionBox ? (
+        <div
+          className='absolute border-2 border-[#8cb3f5] bg-[#0b67d1]/16 shadow-[0_0_0_9999px_rgba(0,0,0,0.45)]'
+          style={{ left: selectionBox.left, top: selectionBox.top, width: selectionBox.width, height: selectionBox.height }}
+        />
+      ) : (
+        <div className='absolute inset-0 shadow-[0_0_0_9999px_rgba(0,0,0,0.38)]' />
+      )}
     </main>
   );
 }
@@ -109,16 +138,20 @@ function CaptureWorkspacePage() {
 
   useEffect(() => {
     let cancelled = false;
+
     async function bootstrap() {
       if (!desktopClient.isAvailable()) {
         return;
       }
+
       const nextCapabilities = await desktopClient.getCapabilities();
       if (!cancelled && nextCapabilities) {
         setCapabilities(nextCapabilities);
       }
     }
+
     void bootstrap();
+
     return () => {
       cancelled = true;
     };
@@ -137,7 +170,7 @@ function CaptureWorkspacePage() {
   }
 
   return (
-    <AppShell title='区域截图翻译' description='桌面端使用独立全屏框选窗口采集截图，再复用现有 OCR 与 overlay 翻译后半段。'>
+    <AppShell title='截图翻译' description='保留真实截图链路，但把界面收敛成更直接的桌面工具形态。'>
       <CaptureTranslationWorkspace
         capabilities={capabilities}
         refreshing={refreshing}

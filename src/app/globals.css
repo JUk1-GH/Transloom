@@ -1,20 +1,12 @@
 @import "tailwindcss";
 
 :root {
-  --background: #edf2f7;
-  --foreground: #0f172a;
-  --surface: rgba(255, 255, 255, 0.82);
-  --surface-muted: #f8fafc;
-  --panel: #ffffff;
-  --muted: #64748b;
-  --border: rgba(148, 163, 184, 0.22);
-  --border-strong: rgba(148, 163, 184, 0.38);
-  --accent: #2563eb;
-  --accent-hover: #1d4ed8;
-  --accent-soft: rgba(37, 99, 235, 0.08);
-  --success: #047857;
-  --warning: #b45309;
-  --danger: #be123c;
+  --background: #d5d5d5;
+  --foreground: #111111;
+  --surface: #f6f6f6;
+  --surface-muted: #ececec;
+  --border: rgba(17, 17, 17, 0.12);
+  --accent: #0b67d1;
 }
 
 @theme inline {
@@ -35,9 +27,7 @@ body {
 
 body {
   margin: 0;
-  background:
-    radial-gradient(circle at top, rgba(191, 219, 254, 0.65), transparent 28%),
-    linear-gradient(180deg, #f9fbfd 0%, #edf2f7 100%);
+  background: #ececec;
   color: var(--foreground);
   font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
   -webkit-font-smoothing: antialiased;
@@ -57,41 +47,36 @@ textarea {
 }
 
 ::selection {
-  background: rgba(37, 99, 235, 0.16);
+  background: rgba(11, 103, 209, 0.18);
 }
 
-.shell-frame {
-  border: 1px solid rgba(255, 255, 255, 0.55);
-  background: rgba(248, 250, 252, 0.72);
-  box-shadow:
-    0 28px 80px rgba(15, 23, 42, 0.10),
-    0 1px 0 rgba(255, 255, 255, 0.85) inset,
-    0 0 0 1px rgba(148, 163, 184, 0.08);
-  backdrop-filter: blur(28px);
-}
-
+.app-scrollbar,
 .custom-scrollbar {
   scrollbar-width: thin;
-  scrollbar-color: rgba(148, 163, 184, 0.45) transparent;
+  scrollbar-color: rgba(17, 17, 17, 0.16) transparent;
 }
 
+.app-scrollbar::-webkit-scrollbar,
 .custom-scrollbar::-webkit-scrollbar {
   width: 10px;
   height: 10px;
 }
 
+.app-scrollbar::-webkit-scrollbar-track,
 .custom-scrollbar::-webkit-scrollbar-track {
   background: transparent;
 }
 
+.app-scrollbar::-webkit-scrollbar-thumb,
 .custom-scrollbar::-webkit-scrollbar-thumb {
   border: 2px solid transparent;
   border-radius: 999px;
-  background: rgba(148, 163, 184, 0.34);
+  background: rgba(17, 17, 17, 0.18);
   background-clip: padding-box;
 }
 
+.app-scrollbar::-webkit-scrollbar-thumb:hover,
 .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-  background: rgba(100, 116, 139, 0.5);
+  background: rgba(17, 17, 17, 0.26);
   background-clip: padding-box;
 }

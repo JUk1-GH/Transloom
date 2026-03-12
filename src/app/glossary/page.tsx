@@ -3,7 +3,6 @@
 import { useEffect, useState } from 'react';
 import { AppShell } from '@/components/ui/app-shell';
 import { Button } from '@/components/ui/button';
-import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 
 type GlossarySummary = {
@@ -64,7 +63,7 @@ export default function GlossaryPage() {
 
         setSummaries(payload.summaries);
         setEntries(payload.entries);
-        setMessage(payload.entries.length > 0 ? '已加载本地术语表。' : '当前还没有术语表，可先创建一条。');
+        setMessage(payload.entries.length > 0 ? '已加载本地术语表。' : '当前还没有术语表，可以先创建一条。');
       } catch (error) {
         if (!cancelled) {
           setMessage(error instanceof Error ? error.message : '读取术语表失败。');
@@ -113,7 +112,7 @@ export default function GlossaryPage() {
 
       setSummaries(result.summaries ?? []);
       setEntries(result.entries ?? []);
-      setMessage('术语表已保存。接下来可在翻译页验证术语命中。');
+      setMessage('术语表已保存，可以回翻译页验证命中效果。');
     } catch (error) {
       setMessage(error instanceof Error ? error.message : '保存术语表失败。');
     } finally {
@@ -122,66 +121,82 @@ export default function GlossaryPage() {
   }
 
   return (
-    <AppShell title='术语表' description='首版术语表支持本地创建与命中验证，翻译前会进行精确字符串替换。'>
-      <div className='grid gap-5 xl:grid-cols-[minmax(0,1.05fr)_360px]'>
-        <Card title='新增术语' eyebrow='Create'>
-          <div className='space-y-4'>
-            <div className='grid gap-4 md:grid-cols-2'>
+    <AppShell title='术语表' description='翻译前会优先做本地精确替换。'>
+      <div className='grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]'>
+        <section className='rounded-[14px] border border-[#d2d2d2] bg-[#f6f6f6]'>
+          <div className='border-b border-[#dddddd] px-4 py-3 text-[15px] font-medium text-[#111111]'>新增术语</div>
+          <div className='space-y-4 px-4 py-4'>
+            <div className='grid gap-3 md:grid-cols-2'>
               <div className='space-y-2 md:col-span-2'>
-                <label htmlFor='glossary-name' className='text-xs font-medium uppercase tracking-[0.16em] text-slate-500'>Glossary name</label>
-                <Input id='glossary-name' value={form.name} onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))} placeholder='术语表名称' />
+                <label htmlFor='glossary-name' className='text-xs text-[#777777]'>术语表名称</label>
+                <Input id='glossary-name' value={form.name} onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))} />
               </div>
+
               <div className='space-y-2'>
-                <label htmlFor='glossary-source-lang' className='text-xs font-medium uppercase tracking-[0.16em] text-slate-500'>Source language</label>
-                <Input id='glossary-source-lang' value={form.sourceLang} onChange={(event) => setForm((current) => ({ ...current, sourceLang: event.target.value }))} placeholder='source lang' />
+                <label htmlFor='glossary-source-lang' className='text-xs text-[#777777]'>源语言</label>
+                <Input id='glossary-source-lang' value={form.sourceLang} onChange={(event) => setForm((current) => ({ ...current, sourceLang: event.target.value }))} />
               </div>
+
               <div className='space-y-2'>
-                <label htmlFor='glossary-target-lang' className='text-xs font-medium uppercase tracking-[0.16em] text-slate-500'>Target language</label>
-                <Input id='glossary-target-lang' value={form.targetLang} onChange={(event) => setForm((current) => ({ ...current, targetLang: event.target.value }))} placeholder='target lang' />
+                <label htmlFor='glossary-target-lang' className='text-xs text-[#777777]'>目标语言</label>
+                <Input id='glossary-target-lang' value={form.targetLang} onChange={(event) => setForm((current) => ({ ...current, targetLang: event.target.value }))} />
               </div>
+
               <div className='space-y-2'>
-                <label htmlFor='glossary-source-term' className='text-xs font-medium uppercase tracking-[0.16em] text-slate-500'>Source term</label>
-                <Input id='glossary-source-term' value={form.sourceTerm} onChange={(event) => setForm((current) => ({ ...current, sourceTerm: event.target.value }))} placeholder='源术语' />
+                <label htmlFor='glossary-source-term' className='text-xs text-[#777777]'>原词</label>
+                <Input id='glossary-source-term' value={form.sourceTerm} onChange={(event) => setForm((current) => ({ ...current, sourceTerm: event.target.value }))} />
               </div>
+
               <div className='space-y-2'>
-                <label htmlFor='glossary-target-term' className='text-xs font-medium uppercase tracking-[0.16em] text-slate-500'>Target term</label>
-                <Input id='glossary-target-term' value={form.targetTerm} onChange={(event) => setForm((current) => ({ ...current, targetTerm: event.target.value }))} placeholder='目标术语' />
+                <label htmlFor='glossary-target-term' className='text-xs text-[#777777]'>译词</label>
+                <Input id='glossary-target-term' value={form.targetTerm} onChange={(event) => setForm((current) => ({ ...current, targetTerm: event.target.value }))} />
               </div>
             </div>
-            <div className='rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-3 text-slate-600'>{message}</div>
-            <Button onClick={() => void handleCreate()} disabled={isSubmitting}>{isSubmitting ? '保存中...' : '保存术语表'}</Button>
-          </div>
-        </Card>
 
-        <Card title='本地术语表摘要' eyebrow='Library'>
-          <div className='space-y-3'>
-            {isLoading ? <div className='rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-4 text-slate-500'>正在读取术语表...</div> : null}
-            {!isLoading && summaries.length === 0 ? <div className='rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-4 text-slate-500'>暂无术语表。</div> : null}
+            <div className='rounded-[10px] border border-[#d9d9d9] bg-white px-3 py-3 text-sm text-[#555555]'>
+              {message}
+            </div>
+
+            <Button onClick={() => void handleCreate()} disabled={isSubmitting}>
+              {isSubmitting ? '保存中...' : '保存术语表'}
+            </Button>
+          </div>
+        </section>
+
+        <section className='rounded-[14px] border border-[#d2d2d2] bg-[#f6f6f6]'>
+          <div className='border-b border-[#dddddd] px-4 py-3 text-[15px] font-medium text-[#111111]'>当前术语表</div>
+          <div className='space-y-2 px-4 py-4 text-sm text-[#555555]'>
+            {isLoading ? <div>正在读取术语表...</div> : null}
+            {!isLoading && summaries.length === 0 ? <div>暂无术语表。</div> : null}
             {summaries.map((item) => (
-              <article key={item.id} className='rounded-xl border border-slate-200 bg-slate-50 px-4 py-4'>
-                <div className='font-medium text-slate-900'>{item.name}</div>
-                <div className='mt-1 text-sm text-slate-500'>{item.sourceLang} → {item.targetLang}</div>
-                <div className='mt-2 text-xs text-slate-500'>{item.entries} entries · 更新于 {item.updatedAt}</div>
-              </article>
+              <div key={item.id} className='rounded-[10px] border border-[#d9d9d9] bg-white px-3 py-3'>
+                <div className='font-medium text-[#111111]'>{item.name}</div>
+                <div className='mt-1'>{item.sourceLang} → {item.targetLang}</div>
+                <div className='mt-1 text-xs text-[#7a7a7a]'>{item.entries} 条 · 更新于 {item.updatedAt}</div>
+              </div>
             ))}
           </div>
-        </Card>
+        </section>
       </div>
 
-      <Card title='术语条目' eyebrow='Entries'>
-        <div className='space-y-2'>
-          {!isLoading && entries.length === 0 ? <div className='rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-4 text-slate-500'>暂无术语条目。</div> : null}
+      <section className='overflow-hidden rounded-[14px] border border-[#d2d2d2] bg-[#f6f6f6]'>
+        <div className='border-b border-[#dddddd] px-4 py-3 text-[15px] font-medium text-[#111111]'>术语条目</div>
+        <div className='divide-y divide-[#dddddd]'>
+          {!isLoading && entries.length === 0 ? (
+            <div className='px-4 py-6 text-sm text-[#666666]'>暂无术语条目。</div>
+          ) : null}
+
           {entries.map((entry) => (
-            <article key={entry.id} className='flex flex-wrap items-start justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3'>
+            <article key={entry.id} className='flex flex-wrap items-start justify-between gap-3 px-4 py-4 text-sm text-[#555555]'>
               <div>
-                <div className='font-medium text-slate-900'>{entry.sourceTerm} → {entry.targetTerm}</div>
-                <div className='mt-1 text-sm text-slate-500'>{entry.glossaryName}</div>
+                <div className='font-medium text-[#111111]'>{entry.sourceTerm} → {entry.targetTerm}</div>
+                <div className='mt-1'>{entry.glossaryName}</div>
               </div>
-              <div className='text-xs text-slate-500'>{entry.sourceLang} → {entry.targetLang}</div>
+              <div className='text-[#7a7a7a]'>{entry.sourceLang} → {entry.targetLang}</div>
             </article>
           ))}
         </div>
-      </Card>
+      </section>
     </AppShell>
   );
 }

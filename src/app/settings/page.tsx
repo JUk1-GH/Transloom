@@ -4,7 +4,6 @@ import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 import { AppShell } from '@/components/ui/app-shell';
 import { Button } from '@/components/ui/button';
-import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { desktopClient } from '@/lib/ipc/desktop-client';
 
@@ -51,6 +50,8 @@ const providerPresetOptions: Array<{ value: ProviderPreset; label: string; baseU
   { value: 'openai', label: 'OpenAI', baseUrl: 'https://api.openai.com/v1', model: 'gpt-4.1-mini', helper: '使用 OpenAI 官方兼容接口。' },
   { value: 'custom', label: '自定义兼容接口', baseUrl: '', model: '', helper: '适用于 OpenRouter、SiliconFlow 或其他兼容 OpenAI 的服务。' },
 ];
+
+const selectClassName = 'h-10 w-full rounded-[10px] border border-[#d1d1d1] bg-white px-3 text-sm text-[#111111] outline-none transition focus:border-[#8cb3f5]';
 
 export default function SettingsPage() {
   const [settings, setSettings] = useState<SettingsState>(defaultSettings);
@@ -206,13 +207,14 @@ export default function SettingsPage() {
   }
 
   return (
-    <AppShell title='本机设置中心' description='首发版仅保留本地单机、BYOK 和 OpenAI-compatible 配置。所有敏感信息只保存在本机 Electron 环境。'>
-      <div className='grid gap-5 xl:grid-cols-[minmax(0,1.15fr)_360px]'>
-        <div className='grid gap-5'>
-          <Card title='兼容接口服务配置' eyebrow='BYOK'>
-            <div className='space-y-4'>
+    <AppShell title='设置' description='本机 provider、默认语言和快捷键都在这里。'>
+      <div className='grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]'>
+        <div className='space-y-4'>
+          <section className='rounded-[14px] border border-[#d2d2d2] bg-[#f6f6f6]'>
+            <div className='border-b border-[#dddddd] px-4 py-3 text-[15px] font-medium text-[#111111]'>Provider 配置</div>
+            <div className='space-y-4 px-4 py-4'>
               <div className='space-y-2'>
-                <label htmlFor='provider-preset' className='text-xs font-medium uppercase tracking-[0.16em] text-slate-500'>服务商预设</label>
+                <label htmlFor='provider-preset' className='text-xs text-[#777777]'>服务预设</label>
                 <select
                   id='provider-preset'
                   value={settings.providerPreset}
@@ -228,87 +230,91 @@ export default function SettingsPage() {
                       },
                     }));
                   }}
-                  className='h-10 w-full rounded-xl border border-slate-200 bg-white px-3.5 text-sm text-slate-900 shadow-sm outline-none focus:border-violet-400 focus:shadow-[0_0_0_3px_rgba(109,40,217,0.10)]'
+                  className={selectClassName}
                 >
                   {providerPresetOptions.map((option) => (
-                    <option key={option.value} value={option.value}>{option.label}</option>
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
                   ))}
                 </select>
-                <div className='rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-3 text-slate-600'>
+                <div className='rounded-[10px] border border-[#d9d9d9] bg-white px-3 py-3 text-sm text-[#555555]'>
                   {providerPresetOptions.find((item) => item.value === settings.providerPreset)?.helper}
                 </div>
               </div>
+
               <div className='grid gap-3 md:grid-cols-2'>
                 <div className='space-y-2'>
-                  <label htmlFor='provider-base-url' className='text-xs font-medium uppercase tracking-[0.16em] text-slate-500'>Base URL</label>
-                  <Input id='provider-base-url' value={settings.provider.baseUrl} onChange={(event) => setSettings((current) => ({ ...current, providerPreset: 'custom', provider: { ...current.provider, baseUrl: event.target.value } }))} placeholder='https://api.deepseek.com' />
+                  <label htmlFor='provider-base-url' className='text-xs text-[#777777]'>Base URL</label>
+                  <Input id='provider-base-url' value={settings.provider.baseUrl} onChange={(event) => setSettings((current) => ({ ...current, providerPreset: 'custom', provider: { ...current.provider, baseUrl: event.target.value } }))} />
                 </div>
                 <div className='space-y-2'>
-                  <label htmlFor='provider-model' className='text-xs font-medium uppercase tracking-[0.16em] text-slate-500'>Model</label>
-                  <Input id='provider-model' value={settings.provider.model} onChange={(event) => setSettings((current) => ({ ...current, providerPreset: 'custom', provider: { ...current.provider, model: event.target.value } }))} placeholder='deepseek-chat' />
+                  <label htmlFor='provider-model' className='text-xs text-[#777777]'>Model</label>
+                  <Input id='provider-model' value={settings.provider.model} onChange={(event) => setSettings((current) => ({ ...current, providerPreset: 'custom', provider: { ...current.provider, model: event.target.value } }))} />
                 </div>
               </div>
+
               <div className='space-y-2'>
-                <label htmlFor='provider-api-key' className='text-xs font-medium uppercase tracking-[0.16em] text-slate-500'>API Key</label>
+                <label htmlFor='provider-api-key' className='text-xs text-[#777777]'>API Key</label>
                 <Input id='provider-api-key' type='password' value={settings.provider.apiKey} onChange={(event) => setSettings((current) => ({ ...current, provider: { ...current.provider, apiKey: event.target.value } }))} placeholder={settings.provider.apiKeyMasked ?? '输入新的 API Key'} />
               </div>
-              <div className='rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-3 text-slate-600'>{connectionMessage}</div>
-              <div className='flex flex-wrap gap-3'>
-                <Button variant='secondary' onClick={() => void handleTestConnection()} disabled={isHydrating || isTesting || !desktopAvailable}>{isTesting ? '测试中...' : '测试连接'}</Button>
-                <Button onClick={() => void handleSave()} disabled={isHydrating || isSaving || !hasUnsavedChanges || !desktopAvailable}>{isSaving ? '保存中...' : '保存本机设置'}</Button>
+
+              <div className='rounded-[10px] border border-[#d9d9d9] bg-white px-3 py-3 text-sm text-[#555555]'>
+                {connectionMessage}
+              </div>
+
+              <div className='flex flex-wrap gap-2'>
+                <Button variant='secondary' onClick={() => void handleTestConnection()} disabled={isHydrating || isTesting || !desktopAvailable}>
+                  {isTesting ? '测试中...' : '测试连接'}
+                </Button>
+                <Button onClick={() => void handleSave()} disabled={isHydrating || isSaving || !hasUnsavedChanges || !desktopAvailable}>
+                  {isSaving ? '保存中...' : '保存设置'}
+                </Button>
               </div>
             </div>
-          </Card>
+          </section>
 
-          <Card title='应用默认项' eyebrow='Preferences'>
-            <div className='grid gap-4 md:grid-cols-2'>
+          <section className='rounded-[14px] border border-[#d2d2d2] bg-[#f6f6f6]'>
+            <div className='border-b border-[#dddddd] px-4 py-3 text-[15px] font-medium text-[#111111]'>应用默认项</div>
+            <div className='grid gap-3 px-4 py-4 md:grid-cols-2'>
               <div className='space-y-2'>
-                <label htmlFor='default-target-lang' className='text-xs font-medium uppercase tracking-[0.16em] text-slate-500'>Default target language</label>
-                <select id='default-target-lang' value={settings.defaultTargetLang} onChange={(event) => setSettings((current) => ({ ...current, defaultTargetLang: event.target.value }))} className='h-10 w-full rounded-xl border border-slate-200 bg-white px-3.5 text-sm text-slate-900 shadow-sm outline-none focus:border-violet-400 focus:shadow-[0_0_0_3px_rgba(109,40,217,0.10)]'>
+                <label htmlFor='default-target-lang' className='text-xs text-[#777777]'>默认目标语言</label>
+                <select id='default-target-lang' value={settings.defaultTargetLang} onChange={(event) => setSettings((current) => ({ ...current, defaultTargetLang: event.target.value }))} className={selectClassName}>
                   {targetLanguageOptions.map((option) => (
-                    <option key={option.value} value={option.value}>{option.label}</option>
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
                   ))}
                 </select>
               </div>
+
               <div className='space-y-2'>
-                <label htmlFor='global-shortcut' className='text-xs font-medium uppercase tracking-[0.16em] text-slate-500'>Global shortcut</label>
-                <Input id='global-shortcut' value={settings.shortcut} onChange={(event) => setSettings((current) => ({ ...current, shortcut: event.target.value }))} aria-label='Global shortcut' />
+                <label htmlFor='global-shortcut' className='text-xs text-[#777777]'>全局快捷键</label>
+                <Input id='global-shortcut' value={settings.shortcut} onChange={(event) => setSettings((current) => ({ ...current, shortcut: event.target.value }))} />
               </div>
             </div>
-          </Card>
+          </section>
         </div>
 
-        <div className='grid gap-5'>
-          <Card title='当前状态' eyebrow='Runtime'>
-            <div className='space-y-3'>
-              <div className='rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-3'>{statusMessage}</div>
-              <div className='rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-3'>环境：{desktopAvailable ? 'Electron desktop' : 'Browser preview'}</div>
-              <div className='rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-3'>运行模式：{settings.runtimeMode === 'real' ? 'Real' : 'Mock'}</div>
-              <div className='rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-3'>已存 API Key：{settings.provider.hasApiKey ? settings.provider.apiKeyMasked ?? '已保存' : '未保存'}</div>
-              <div className='rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-3'>默认目标语言：{targetLanguageOptions.find((item) => item.value === settings.defaultTargetLang)?.label ?? settings.defaultTargetLang}</div>
+        <div className='space-y-4'>
+          <section className='rounded-[14px] border border-[#d2d2d2] bg-[#f6f6f6]'>
+            <div className='border-b border-[#dddddd] px-4 py-3 text-[15px] font-medium text-[#111111]'>当前状态</div>
+            <div className='space-y-2 px-4 py-4 text-sm text-[#555555]'>
+              <div className='rounded-[10px] border border-[#d9d9d9] bg-white px-3 py-3'>{statusMessage}</div>
+              <div>环境：{desktopAvailable ? 'Electron desktop' : 'Browser preview'}</div>
+              <div>运行模式：{settings.runtimeMode === 'real' ? 'Real' : 'Mock'}</div>
+              <div>已存 API Key：{settings.provider.hasApiKey ? settings.provider.apiKeyMasked ?? '已保存' : '未保存'}</div>
+              <div>默认语言：{targetLanguageOptions.find((item) => item.value === settings.defaultTargetLang)?.label ?? settings.defaultTargetLang}</div>
             </div>
-          </Card>
+          </section>
 
-          <Card title='验证入口' eyebrow='Actions'>
-            <div className='space-y-3'>
-              <Link href='/translate' className='flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-3 text-sm font-medium text-slate-700 transition hover:border-violet-300 hover:text-violet-700'>
-                <span>去文本翻译验证</span>
-                <span>→</span>
-              </Link>
-              <Link href='/capture' className='flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-3 text-sm font-medium text-slate-700 transition hover:border-violet-300 hover:text-violet-700'>
-                <span>去截屏翻译验证</span>
-                <span>→</span>
-              </Link>
+          <section className='rounded-[14px] border border-[#d2d2d2] bg-[#f6f6f6]'>
+            <div className='border-b border-[#dddddd] px-4 py-3 text-[15px] font-medium text-[#111111]'>验证入口</div>
+            <div className='space-y-2 px-4 py-4 text-sm text-[#555555]'>
+              <Link href='/translate' className='block rounded-[10px] border border-[#d1d1d1] bg-white px-3 py-2.5 transition hover:bg-[#fafafa]'>去文本翻译验证</Link>
+              <Link href='/capture' className='block rounded-[10px] border border-[#d1d1d1] bg-white px-3 py-2.5 transition hover:bg-[#fafafa]'>去截图翻译验证</Link>
             </div>
-          </Card>
-
-          <Card title='当前策略' eyebrow='Notes'>
-            <ul className='space-y-3'>
-              <li>- 配置中心是唯一 provider 来源。</li>
-              <li>- 缺 Key 或连通失败时，应用继续以 Mock 模式可用。</li>
-              <li>- 术语表、历史、用量都保存在本地 SQLite。</li>
-            </ul>
-          </Card>
+          </section>
         </div>
       </div>
     </AppShell>

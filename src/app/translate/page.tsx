@@ -5,8 +5,8 @@ import { TextTranslationWorkspace } from '@/components/workspace/text-translatio
 
 export default function TranslatePage() {
   return (
-    <AppShell title='文本翻译工作区' description='以主编辑区为中心，保持 DeepL 风格的高频翻译节奏，并为截图与小窗链路预留统一上下文。'>
-      <TextTranslationWorkspace />
+    <AppShell title='翻译文本' description='像桌面翻译器一样直接工作：左边输入，右边查看结果。'>
+      <TextTranslationWorkspace initialSource='' />
     </AppShell>
   );
 }
