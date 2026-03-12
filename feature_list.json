@@ -116,5 +116,22 @@
       "src/server/usage/service.ts"
     ],
     "nextStep": "稳定本地数据库初始化与迁移策略，确认 packaged desktop 的数据目录、缺表恢复和 schema 升级路径。"
+  },
+  {
+    "name": "deepl-macos-ui",
+    "status": "partial",
+    "description": "当前首页与文本翻译工作区已经具备主流程能力，但整体视觉层级、双栏面板、顶部语言栏、状态提示和桌面原生感仍偏网页风格，离 DeepL for Mac 那种安静、紧凑、macOS 化的高频翻译体验还有明显差距。",
+    "files": [
+      "src/app/page.tsx",
+      "src/app/translate/page.tsx",
+      "src/app/globals.css",
+      "src/components/workspace/text-translation-workspace.tsx",
+      "src/components/ui/app-shell.tsx",
+      "src/components/ui/button.tsx",
+      "src/components/ui/card.tsx",
+      "src/components/ui/input.tsx",
+      "src/components/ui/textarea.tsx"
+    ],
+    "nextStep": "把首页、主翻译工作区与共享 shell 改造成接近 DeepL for Mac 的桌面风格：强化双栏布局、紧凑的顶部语言切换栏、安静的状态提示、更清晰的输入输出面板层级与更原生的 macOS 细节，同时避免直接复制品牌资产。"
   }
 ]

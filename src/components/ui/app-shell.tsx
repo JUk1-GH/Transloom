@@ -98,50 +98,56 @@ export function AppShell({
 
   return (
     <div className="min-h-screen px-3 py-3 md:px-4 md:py-4">
-      <div className="shell-frame mx-auto flex min-h-[calc(100vh-1.25rem)] w-full max-w-[1440px] overflow-hidden rounded-[22px] md:min-h-[calc(100vh-1.5rem)]">
-        <aside className="hidden w-full max-w-[208px] flex-col border-r border-slate-200 bg-slate-50/40 md:flex">
-          <div className="border-b border-slate-200 px-4 py-3.5">
+      <div className="shell-frame mx-auto flex min-h-[calc(100vh-1.25rem)] w-full max-w-[1500px] overflow-hidden rounded-[30px] md:min-h-[calc(100vh-1.5rem)]">
+        <aside className="hidden w-full max-w-[228px] flex-col border-r border-[rgba(148,163,184,0.14)] bg-[linear-gradient(180deg,rgba(255,255,255,0.78)_0%,rgba(248,250,252,0.92)_100%)] md:flex">
+          <div className="border-b border-[rgba(148,163,184,0.14)] px-5 py-4">
             <div className="flex items-center gap-3">
-              <div className="flex h-8.5 w-8.5 items-center justify-center rounded-xl bg-violet-700 text-white shadow-sm">
+              <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-[linear-gradient(180deg,#3b82f6_0%,#1d4ed8_100%)] text-white shadow-[0_10px_30px_rgba(37,99,235,0.28)]">
                 <LanguagesIcon className="h-4.5 w-4.5" />
               </div>
               <div className="flex flex-col">
-                <span className="text-sm font-semibold tracking-tight text-slate-900">Transloom</span>
-                <span className="text-[11px] text-slate-500">Desktop translation suite</span>
+                <span className="text-[15px] font-semibold tracking-[-0.03em] text-slate-900">Transloom</span>
+                <span className="text-[11px] text-slate-500">Desktop translator</span>
               </div>
             </div>
           </div>
 
-          <nav className="flex-1 space-y-1 px-2 py-2.5">
-            {navItems.map((item) => {
-              const Icon = item.icon;
-              const active = pathname === item.href;
+          <div className="px-4 py-4">
+            <div className="rounded-[20px] border border-[rgba(148,163,184,0.12)] bg-white/72 p-2 shadow-[0_14px_32px_rgba(15,23,42,0.04)] backdrop-blur-xl">
+              <nav className="space-y-1">
+                {navItems.map((item) => {
+                  const Icon = item.icon;
+                  const active = pathname === item.href;
 
-              return (
-                <Link
-                  key={item.href}
-                  href={item.href}
-                  className={clsx(
-                    "flex items-center gap-3 rounded-xl px-3 py-2 text-sm font-medium transition-colors",
-                    active
-                      ? "bg-violet-50/80 text-violet-700"
-                      : "text-slate-500 hover:bg-white hover:text-slate-900",
-                  )}
-                >
-                  <Icon className="h-4 w-4" />
-                  {item.label}
-                </Link>
-              );
-            })}
-          </nav>
+                  return (
+                    <Link
+                      key={item.href}
+                      href={item.href}
+                      className={clsx(
+                        "flex items-center gap-3 rounded-[14px] px-3 py-2.5 text-sm font-medium tracking-[-0.01em] transition-all duration-150",
+                        active
+                          ? "bg-[linear-gradient(180deg,rgba(239,246,255,0.98)_0%,rgba(219,234,254,0.96)_100%)] text-blue-700 shadow-[0_10px_24px_rgba(59,130,246,0.12)]"
+                          : "text-slate-500 hover:bg-white hover:text-slate-900",
+                      )}
+                    >
+                      <Icon className="h-4 w-4" />
+                      {item.label}
+                    </Link>
+                  );
+                })}
+              </nav>
+            </div>
+          </div>
 
-          <div className="border-t border-slate-200 px-4 py-2.5 text-xs leading-5 text-slate-500">
-            聚焦文本翻译、截屏翻译、历史记录与术语管理。
+          <div className="mt-auto px-5 pb-5">
+            <div className="rounded-[20px] border border-[rgba(148,163,184,0.14)] bg-white/70 px-4 py-3 text-xs leading-5 text-slate-500 shadow-[0_10px_24px_rgba(15,23,42,0.04)] backdrop-blur-xl">
+              聚焦文本翻译、截屏翻译与桌面端高频操作。
+            </div>
           </div>
         </aside>
 
-        <main className="flex flex-1 flex-col overflow-y-auto bg-[linear-gradient(180deg,#fafafa_0%,#f8fafc_100%)] custom-scrollbar">
-          <div className="flex flex-1 flex-col p-3.5 md:p-4.5">
+        <main className="flex flex-1 flex-col overflow-y-auto bg-[linear-gradient(180deg,rgba(248,250,252,0.72)_0%,rgba(241,245,249,0.92)_100%)] custom-scrollbar">
+          <div className="sticky top-0 z-20 border-b border-[rgba(148,163,184,0.14)] bg-[rgba(250,252,255,0.7)] px-3.5 py-3 backdrop-blur-xl md:px-5">
             <nav className="mb-3 flex gap-2 overflow-x-auto pb-1 md:hidden">
               {navItems.map((item) => {
                 const active = pathname === item.href;
@@ -153,8 +159,8 @@ export function AppShell({
                     className={clsx(
                       "whitespace-nowrap rounded-full border px-3 py-1.5 text-sm font-medium transition-colors",
                       active
-                        ? "border-violet-200 bg-violet-50 text-violet-700"
-                        : "border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:text-slate-900",
+                        ? "border-blue-200 bg-blue-50 text-blue-700"
+                        : "border-[rgba(148,163,184,0.18)] bg-white/90 text-slate-600 hover:border-slate-300 hover:text-slate-900",
                     )}
                   >
                     {item.label}
@@ -163,11 +169,18 @@ export function AppShell({
               })}
             </nav>
 
-            <div className="mb-3 border-b border-slate-200 px-1 pb-2.5">
-              <h1 className="text-[22px] font-semibold tracking-[-0.03em] text-slate-900">{title}</h1>
-              <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-500">{description}</p>
+            <div className="flex flex-wrap items-end justify-between gap-3">
+              <div>
+                <h1 className="text-[24px] font-semibold tracking-[-0.04em] text-slate-950 md:text-[28px]">{title}</h1>
+                <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-500">{description}</p>
+              </div>
+              <div className="hidden items-center gap-2 rounded-full border border-[rgba(148,163,184,0.16)] bg-white/80 px-3 py-1.5 text-[11px] uppercase tracking-[0.18em] text-slate-400 shadow-[0_10px_24px_rgba(15,23,42,0.04)] md:flex">
+                <span>Focused workspace</span>
+              </div>
             </div>
+          </div>
 
+          <div className="flex flex-1 flex-col p-3.5 md:p-5">
             <div className="grid gap-5">{children}</div>
           </div>
         </main>

@@ -15,12 +15,12 @@ export function Card({
   return (
     <section
       className={clsx(
-        "rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm",
+        "rounded-[24px] border border-[rgba(148,163,184,0.16)] bg-[rgba(255,255,255,0.82)] p-5 shadow-[0_20px_50px_rgba(15,23,42,0.06)] backdrop-blur-xl",
         className,
       )}
     >
-      {eyebrow ? <p className="mb-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">{eyebrow}</p> : null}
-      <h2 className="text-lg font-semibold tracking-[-0.02em] text-slate-900">{title}</h2>
+      {eyebrow ? <p className="mb-1 text-[10px] font-semibold uppercase tracking-[0.22em] text-slate-400">{eyebrow}</p> : null}
+      <h2 className="text-[17px] font-semibold tracking-[-0.03em] text-slate-900">{title}</h2>
       <div className="mt-4 text-sm leading-6 text-slate-600">{children}</div>
     </section>
   );
