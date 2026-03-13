@@ -50,6 +50,14 @@ textarea {
   background: rgba(11, 103, 209, 0.18);
 }
 
+.drag-region {
+  -webkit-app-region: drag;
+}
+
+.no-drag {
+  -webkit-app-region: no-drag;
+}
+
 .app-scrollbar,
 .custom-scrollbar {
   scrollbar-width: thin;

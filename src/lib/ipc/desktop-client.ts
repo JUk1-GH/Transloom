@@ -17,6 +17,7 @@ declare global {
       }>;
       getRuntimeMode: () => Promise<{
         runtimeMode: 'real' | 'mock';
+        status?: 'ready' | 'provider-missing' | 'model-missing' | 'api-key-missing' | 'mock-fallback';
         baseUrl: string | null;
         model: string | null;
         hasApiKey: boolean;
@@ -24,6 +25,8 @@ declare global {
           baseUrl: string;
           model: string;
           hasApiKey: boolean;
+          enabled?: boolean;
+          label?: string;
         };
       }>;
       getProviderSecret: () => Promise<{

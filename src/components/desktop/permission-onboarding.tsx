@@ -26,21 +26,22 @@ export type DesktopCapabilities = {
 export function PermissionOnboarding({
   capabilities,
   refreshing,
-  onRefresh,
-  onOpenAccessibilitySettings,
-  onOpenScreenRecordingSettings,
+  onRefreshAction,
+  onOpenAccessibilitySettingsAction,
+  onOpenScreenRecordingSettingsAction,
   prominent = false,
 }: {
   capabilities: DesktopCapabilities | null;
   refreshing?: boolean;
-  onRefresh?: () => void;
-  onOpenAccessibilitySettings?: () => void;
-  onOpenScreenRecordingSettings?: () => void;
+  onRefreshAction?: () => void;
+  onOpenAccessibilitySettingsAction?: () => void;
+  onOpenScreenRecordingSettingsAction?: () => void;
   prominent?: boolean;
 }) {
   const accessibilityGranted = capabilities?.accessibility.granted ?? false;
   const screenRecordingGranted = capabilities?.screenRecording?.granted ?? false;
   const missingPermission = !accessibilityGranted ? 'accessibility' : !screenRecordingGranted ? 'screen-recording' : null;
+  const isBrowserPreview = capabilities?.desktopAvailable === false;
   const primaryMessage = missingPermission === 'screen-recording'
     ? (capabilities?.screenRecording?.message ?? '正在检测屏幕录制权限。')
     : (capabilities?.accessibility.message ?? '正在检测辅助功能权限。');
@@ -48,32 +49,48 @@ export function PermissionOnboarding({
     ? capabilities?.screenRecording?.canOpenSettings
     : capabilities?.accessibility.canOpenSettings;
   const handleOpenSettings = missingPermission === 'screen-recording'
-    ? onOpenScreenRecordingSettings
-    : onOpenAccessibilitySettings;
+    ? onOpenScreenRecordingSettingsAction
+    : onOpenAccessibilitySettingsAction;
+
+  if (isBrowserPreview) {
+    return (
+      <div className='flex flex-wrap items-center justify-between gap-2 rounded-[12px] border border-[#d8d8d8] bg-[#f6f6f4] px-3 py-2 text-sm text-[#5f5f5f]'>
+        <div className='min-w-0'>
+          <span className='font-medium text-[#202020]'>浏览器预览：</span>
+          系统级截图、权限检测和打开系统设置只在 Electron 桌面端可用。
+        </div>
+        <div className='rounded-full border border-[#d8d8d8] bg-white px-2.5 py-0.5 text-[11px] font-medium tracking-[0.08em] text-[#6b6b6b]'>
+          Electron only
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <Card title={missingPermission === 'screen-recording' ? '屏幕录制权限' : '辅助功能权限'} eyebrow='权限'>
-      <div className='space-y-4'>
-        <div className='rounded-[10px] border border-[#ded7c2] bg-[#fbf7ec] px-3.5 py-3 text-sm text-[#6b5d2e]'>
+    <Card
+      title={missingPermission === 'screen-recording' ? '屏幕录制权限' : '辅助功能权限'}
+      eyebrow='权限'
+      className='overflow-hidden'
+    >
+      <div className='space-y-2.5'>
+        <div className='rounded-[10px] border border-[#ded7c2] bg-[#fbf7ec] px-3 py-2 text-sm text-[#6b5d2e]'>
           {primaryMessage}
         </div>
 
-        <ol className='space-y-2 text-sm text-[#505050]'>
-          <li>1. 打开系统设置里的“隐私与安全性”。</li>
-          <li>2. 启用辅助功能后，才能读取选中文本并拉起小窗。</li>
-          <li>3. 启用屏幕录制后，才能进行区域截图翻译。</li>
-          <li>4. 回到 Transloom 后点击刷新，确认状态已生效。</li>
-        </ol>
+        <div className='grid gap-1.5 text-sm text-[#505050] sm:grid-cols-2'>
+          <span>1. 打开系统设置</span>
+          <span>2. 启用辅助功能</span>
+          <span>3. 启用屏幕录制</span>
+          <span>4. 返回后刷新</span>
+        </div>
 
         {prominent ? (
-          <div className='rounded-[10px] border border-[#d9d9d9] bg-white px-3.5 py-3 text-sm text-[#555555]'>
-            建议先把权限处理完，再体验完整桌面链路。
-          </div>
+          <div className='text-sm text-[#555555]'>建议先完成权限设置，再体验完整桌面链路。</div>
         ) : null}
 
         <div className='flex flex-wrap gap-2'>
-          {onRefresh ? (
-            <Button variant='secondary' onClick={onRefresh} disabled={refreshing || !capabilities?.desktopAvailable}>
+          {onRefreshAction ? (
+            <Button variant='secondary' onClick={onRefreshAction} disabled={refreshing || !capabilities?.desktopAvailable}>
               {refreshing ? '刷新中...' : '刷新状态'}
             </Button>
           ) : null}

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 
 const ROOT = findRepoRoot(process.cwd());
 const CONTROL_PLANE_PATH = path.join(ROOT, '.harness', 'bin', 'control-plane.mjs');
@@ -12,10 +12,28 @@ const RUN_LEDGER_PATH = path.join(STATE_DIR, 'runs.jsonl');
 const DEFAULT_OWNER = 'claude-supervisor';
 const DEFAULT_ROLES = ['reviewer', 'verifier', 'implementer'];
 const HISTORY_EVENT_LIMIT = 6;
+const DEFAULT_CLAUDE_OPTIONS = Object.freeze({
+  permissionMode: 'auto',
+  settingSources: 'local',
+  outputFormat: 'stream-json',
+  includePartialMessages: true,
+  disableSlashCommands: true,
+  strictMcpConfig: true,
+  noSessionPersistence: true,
+  heartbeatMs: 60_000,
+  idleTimeoutMs: 15 * 60_000,
+  maxRuntimeMs: 60 * 60_000,
+  killGraceMs: 5_000,
+  enableDebugFile: true,
+  disableTelemetry: true,
+});
 
-main();
+main().catch((error) => {
+  console.error(`ERROR: ${error.message}`);
+  process.exitCode = 1;
+});
 
-function main() {
+async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help || args._[0] === 'help') {
     printHelp();
@@ -30,6 +48,7 @@ function main() {
   const maxRounds = parseNumber(args['max-rounds'], 0);
   const idleSleepMs = parseNumber(args['sleep-ms'], 15000);
   const stopWhenIdle = Boolean(args['stop-when-idle']);
+  const claudeOptions = parseClaudeOptions(args);
 
   ensurePrerequisites();
 
@@ -40,6 +59,8 @@ function main() {
   console.log(`- lane: ${lane || 'all'}`);
   console.log(`- max rounds: ${maxRounds === 0 ? 'unbounded' : maxRounds}`);
   console.log(`- idle sleep ms: ${idleSleepMs}`);
+  console.log(`- claude: settings=${claudeOptions.settingSources} permission=${claudeOptions.permissionMode} output=${claudeOptions.outputFormat}`);
+  console.log(`- watchdog: heartbeat=${formatDurationMs(claudeOptions.heartbeatMs)} idle=${formatDurationMs(claudeOptions.idleTimeoutMs)} max=${formatDurationMs(claudeOptions.maxRuntimeMs)}`);
 
   let rounds = 0;
   while (maxRounds === 0 || rounds < maxRounds) {
@@ -62,11 +83,16 @@ function main() {
     run = attachResultContract(run);
     run = attachAutomationContext(run, leasedTask);
     console.log(`[${nowIso()}] prepared ${run.runId}`);
-    const result = executePreparedRun(run);
+    const result = await executePreparedRun(run, claudeOptions);
 
     if (result.exitCode !== 0) {
       console.log(`[${nowIso()}] run ${run.runId} failed with exit=${result.exitCode}`);
-      failLease({ taskId: leasedTask.id, role, owner, reason: `supervisor observed claude exit ${result.exitCode}${result.signal ? ` signal=${result.signal}` : ''}` });
+      failLease({
+        taskId: leasedTask.id,
+        role,
+        owner,
+        reason: result.reason || `supervisor observed claude exit ${result.exitCode}${result.signal ? ` signal=${result.signal}` : ''}`,
+      });
     } else {
       finalizeSuccessfulRun(run);
     }
@@ -116,14 +142,16 @@ function prepareRun({ taskId, role, owner, model }) {
 
 function attachResultContract(run) {
   const resultPath = path.join(path.dirname(run.metadataPath), 'result.json');
+  const debugPath = path.join(path.dirname(run.metadataPath), 'claude.debug.log');
   const promptContract = buildResultContract(run, resultPath);
   fs.appendFileSync(run.promptPath, promptContract);
 
   const metadata = JSON.parse(fs.readFileSync(run.metadataPath, 'utf8'));
   metadata.resultPath = resultPath;
+  metadata.debugPath = debugPath;
   fs.writeFileSync(run.metadataPath, `${JSON.stringify(metadata, null, 2)}\n`);
 
-  return { ...run, resultPath };
+  return { ...run, resultPath, debugPath };
 }
 
 function attachAutomationContext(run, task) {
@@ -160,49 +188,161 @@ function buildAutomationContext(task, run) {
   return `\n## Unattended Loop Policy\n- You are running inside a fully unattended supervisor loop.\n- Do not wait for human replies, approvals, or manual lease updates.\n- Use the current repository state, task history, validation outputs, and git diff as your evidence.\n- Manual gates are best-effort in unattended mode: execute them when possible; if they cannot be run from this environment, say that clearly in your \`note\` and still choose \`complete\` or \`fail\` based on the best available evidence.\n- A successful unattended handoff must end with a valid \`result.json\` file.\n\n## Role Checklist\n${roleChecklist}\n\n## Recent Task History\n${historyLines}\n\n## Manual Gates For This Task\n${manualGateLines}\n`;
 }
 
-function executePreparedRun(run) {
+async function executePreparedRun(run, claudeOptions) {
   const prompt = fs.readFileSync(run.promptPath, 'utf8');
-  const commandArgs = ['-p', '--permission-mode', 'auto'];
-  if (run.model) {
-    commandArgs.push('--model', run.model);
-  }
-  commandArgs.push(prompt);
+  const commandArgs = buildClaudeCommandArgs(run, prompt, claudeOptions);
 
   const startedAt = nowIso();
   appendJsonl(RUN_LEDGER_PATH, { runId: run.runId, taskId: run.taskId, status: 'started', at: startedAt });
   appendJsonl(EVENTS_PATH, { at: startedAt, type: 'run.started', taskId: run.taskId, role: run.role, owner: run.owner, note: run.runId });
 
-  const result = spawnSync('claude', commandArgs, {
+  fs.writeFileSync(run.logPath, [
+    '# Heavy Harness Session',
+    `startedAt: ${startedAt}`,
+    `command: claude ${JSON.stringify(commandArgs.slice(0, -1))} <prompt>`,
+    '',
+  ].join('\n'));
+
+  const logStream = fs.createWriteStream(run.logPath, { flags: 'a' });
+  const child = spawn('claude', commandArgs, {
     cwd: ROOT,
-    encoding: 'utf8',
-    maxBuffer: 10 * 1024 * 1024,
+    env: buildClaudeEnv(claudeOptions),
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  const startedAtMs = Date.now();
+  let lastActivityAtMs = startedAtMs;
+  let watchdogReason = null;
+  let forcedSignal = null;
+  let childExited = false;
+
+  child.stdout.on('data', (chunk) => {
+    lastActivityAtMs = Date.now();
+    const text = chunk.toString('utf8');
+    logStream.write(`[stdout] ${text}`);
+    if (!text.endsWith('\n')) {
+      logStream.write('\n');
+    }
+  });
+
+  child.stderr.on('data', (chunk) => {
+    lastActivityAtMs = Date.now();
+    const text = chunk.toString('utf8');
+    logStream.write(`[stderr] ${text}`);
+    if (!text.endsWith('\n')) {
+      logStream.write('\n');
+    }
+  });
+
+  const heartbeatTimer = setInterval(() => {
+    const elapsed = Date.now() - startedAtMs;
+    const quiet = Date.now() - lastActivityAtMs;
+    try {
+      heartbeatLease(run);
+      console.log(`[${nowIso()}] heartbeat ${run.runId} elapsed=${formatDurationMs(elapsed)} quiet=${formatDurationMs(quiet)}`);
+    } catch (error) {
+      console.log(`[${nowIso()}] heartbeat warning for ${run.runId}: ${error.message}`);
+    }
+  }, claudeOptions.heartbeatMs);
+  heartbeatTimer.unref?.();
+
+  const watchdogTimer = setInterval(() => {
+    const now = Date.now();
+    if (!watchdogReason && claudeOptions.idleTimeoutMs > 0 && now - lastActivityAtMs > claudeOptions.idleTimeoutMs) {
+      watchdogReason = `supervisor watchdog: no Claude output for ${formatDurationMs(now - lastActivityAtMs)}`;
+      appendJsonl(EVENTS_PATH, { at: nowIso(), type: 'run.watchdog', taskId: run.taskId, role: run.role, owner: run.owner, note: watchdogReason });
+      logStream.write(`[watchdog] ${watchdogReason}\n`);
+      forcedSignal = 'SIGTERM';
+      child.kill('SIGTERM');
+      const killTimer = setTimeout(() => {
+        if (!childExited) {
+          forcedSignal = 'SIGKILL';
+          child.kill('SIGKILL');
+        }
+      }, claudeOptions.killGraceMs);
+      killTimer.unref?.();
+      return;
+    }
+    if (!watchdogReason && claudeOptions.maxRuntimeMs > 0 && now - startedAtMs > claudeOptions.maxRuntimeMs) {
+      watchdogReason = `supervisor watchdog: max runtime ${formatDurationMs(claudeOptions.maxRuntimeMs)} exceeded`;
+      appendJsonl(EVENTS_PATH, { at: nowIso(), type: 'run.watchdog', taskId: run.taskId, role: run.role, owner: run.owner, note: watchdogReason });
+      logStream.write(`[watchdog] ${watchdogReason}\n`);
+      forcedSignal = 'SIGTERM';
+      child.kill('SIGTERM');
+      const killTimer = setTimeout(() => {
+        if (!childExited) {
+          forcedSignal = 'SIGKILL';
+          child.kill('SIGKILL');
+        }
+      }, claudeOptions.killGraceMs);
+      killTimer.unref?.();
+    }
+  }, 5_000);
+  watchdogTimer.unref?.();
+
+  const result = await new Promise((resolve) => {
+    let settled = false;
+
+    const finish = (payload) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearInterval(heartbeatTimer);
+      clearInterval(watchdogTimer);
+      resolve(payload);
+    };
+
+    child.on('error', (error) => {
+      logStream.write(`[spawn-error] ${error.message}\n`);
+      finish({ status: 1, signal: null, error });
+    });
+
+    child.on('exit', (status, signal) => {
+      childExited = true;
+      finish({ status, signal });
+    });
+  });
+
+  await new Promise((resolve) => {
+    logStream.end(resolve);
   });
 
   const finishedAt = nowIso();
-  const log = [`# stdout\n${result.stdout || ''}`, `\n# stderr\n${result.stderr || ''}`].join('\n');
-  fs.writeFileSync(run.logPath, log);
+  const finalStatus = watchdogReason ? 'errored' : result.status === 0 ? 'finished' : 'errored';
   appendJsonl(RUN_LEDGER_PATH, {
     runId: run.runId,
     taskId: run.taskId,
-    status: result.status === 0 ? 'finished' : 'errored',
+    status: finalStatus,
     at: finishedAt,
     exitCode: result.status,
-    signal: result.signal,
+    signal: forcedSignal || result.signal,
     logPath: run.logPath,
+    debugPath: run.debugPath,
+    reason: watchdogReason,
   });
   appendJsonl(EVENTS_PATH, {
     at: finishedAt,
-    type: result.status === 0 ? 'run.finished' : 'run.errored',
+    type: finalStatus === 'finished' ? 'run.finished' : 'run.errored',
     taskId: run.taskId,
     role: run.role,
     owner: run.owner,
-    note: `exit=${result.status}`,
+    note: watchdogReason || `exit=${result.status}`,
   });
 
   console.log(`Run finished with exit code ${result.status}`);
   console.log(`- log: ${run.logPath}`);
+  if (run.debugPath) {
+    console.log(`- debug: ${run.debugPath}`);
+  }
+  if (watchdogReason) {
+    console.log(`- watchdog: ${watchdogReason}`);
+  }
 
-  return { exitCode: result.status ?? 1, signal: result.signal || null };
+  return {
+    exitCode: watchdogReason ? 124 : result.status ?? 1,
+    signal: forcedSignal || result.signal || null,
+    reason: watchdogReason,
+  };
 }
 
 function finalizeSuccessfulRun(run) {
@@ -377,6 +517,16 @@ function failLease({ taskId, role, owner, reason }) {
   }
 }
 
+function heartbeatLease(run) {
+  runControlPlane([
+    'heartbeat',
+    '--task',
+    run.taskId,
+    '--owner',
+    run.owner,
+  ]);
+}
+
 function defaultNextStatusForRole(role) {
   if (role === 'reviewer') {
     return 'done';
@@ -505,6 +655,45 @@ function runControlPlane(commandArgs, options = {}) {
   return result;
 }
 
+function buildClaudeCommandArgs(run, prompt, claudeOptions) {
+  const commandArgs = ['-p', '--permission-mode', claudeOptions.permissionMode];
+  if (claudeOptions.outputFormat === 'stream-json') {
+    commandArgs.push('--verbose');
+  }
+  commandArgs.push('--output-format', claudeOptions.outputFormat);
+  if (claudeOptions.includePartialMessages && claudeOptions.outputFormat === 'stream-json') {
+    commandArgs.push('--include-partial-messages');
+  }
+  if (claudeOptions.settingSources) {
+    commandArgs.push('--setting-sources', claudeOptions.settingSources);
+  }
+  if (claudeOptions.disableSlashCommands) {
+    commandArgs.push('--disable-slash-commands');
+  }
+  if (claudeOptions.strictMcpConfig) {
+    commandArgs.push('--strict-mcp-config');
+  }
+  if (claudeOptions.noSessionPersistence) {
+    commandArgs.push('--no-session-persistence');
+  }
+  if (claudeOptions.enableDebugFile && run.debugPath) {
+    commandArgs.push('--debug-file', run.debugPath);
+  }
+  if (run.model) {
+    commandArgs.push('--model', run.model);
+  }
+  commandArgs.push(prompt);
+  return commandArgs;
+}
+
+function buildClaudeEnv(claudeOptions) {
+  const env = { ...process.env };
+  if (claudeOptions.disableTelemetry) {
+    env.CLAUDE_CODE_ENABLE_TELEMETRY = '0';
+  }
+  return env;
+}
+
 function parseJsonOutput(stdout) {
   try {
     return JSON.parse(stdout);
@@ -532,6 +721,24 @@ function parseRoles(rawValue) {
     throw new Error(`invalid roles: ${invalidRoles.join(', ')}`);
   }
   return uniqueRoles;
+}
+
+function parseClaudeOptions(args) {
+  return {
+    permissionMode: args['claude-permission-mode'] || DEFAULT_CLAUDE_OPTIONS.permissionMode,
+    settingSources: args['claude-setting-sources'] || DEFAULT_CLAUDE_OPTIONS.settingSources,
+    outputFormat: args['claude-output-format'] || DEFAULT_CLAUDE_OPTIONS.outputFormat,
+    includePartialMessages: !Boolean(args['no-partial-messages']),
+    disableSlashCommands: !Boolean(args['allow-slash-commands']),
+    strictMcpConfig: !Boolean(args['allow-configured-mcp']),
+    noSessionPersistence: !Boolean(args['allow-session-persistence']),
+    heartbeatMs: parseNumber(args['heartbeat-ms'], DEFAULT_CLAUDE_OPTIONS.heartbeatMs),
+    idleTimeoutMs: parseNumber(args['idle-timeout-ms'], DEFAULT_CLAUDE_OPTIONS.idleTimeoutMs),
+    maxRuntimeMs: parseNumber(args['max-runtime-ms'], DEFAULT_CLAUDE_OPTIONS.maxRuntimeMs),
+    killGraceMs: parseNumber(args['kill-grace-ms'], DEFAULT_CLAUDE_OPTIONS.killGraceMs),
+    enableDebugFile: !Boolean(args['no-debug-file']),
+    disableTelemetry: !Boolean(args['allow-telemetry']),
+  };
 }
 
 function parseArgs(argv) {
@@ -578,6 +785,24 @@ function nowIso() {
   return new Date().toISOString();
 }
 
+function formatDurationMs(ms) {
+  if (ms < 1000) {
+    return `${ms}ms`;
+  }
+  const totalSeconds = Math.round(ms / 1000);
+  if (totalSeconds < 60) {
+    return `${totalSeconds}s`;
+  }
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes < 60) {
+    return seconds === 0 ? `${minutes}m` : `${minutes}m${seconds}s`;
+  }
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  return remainingMinutes === 0 ? `${hours}h` : `${hours}h${remainingMinutes}m`;
+}
+
 function sleep(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
@@ -597,5 +822,5 @@ function findRepoRoot(startDir) {
 }
 
 function printHelp() {
-  console.log(`Heavy harness supervisor loop\n\nUsage:\n  node .harness/bin/supervisor-loop.mjs [--roles reviewer,verifier,implementer] [--owner NAME] [--lane NAME]\n\nOptions:\n  --roles ROLE1,ROLE2,ROLE3  Role priority order. Default drains reviewer -> verifier -> implementer.\n  --owner NAME               Lease owner recorded in queue state. Default: claude-supervisor.\n  --lane NAME                Restrict leasing to one lane.\n  --ttl-min N                Override lease TTL in minutes.\n  --model MODEL              Pass through Claude model override.\n  --max-rounds N             Stop after N leasing attempts. 0 means unbounded.\n  --sleep-ms N               Idle polling interval in milliseconds. Default: 15000.\n  --stop-when-idle           Exit as soon as no task can be leased.\n\nAuto-close:\n  Successful runs auto-close only from a valid result.json handoff.\n  Missing or invalid handoffs are treated as failed unattended runs and are requeued or blocked automatically.`);
+  console.log(`Heavy harness supervisor loop\n\nUsage:\n  node .harness/bin/supervisor-loop.mjs [--roles reviewer,verifier,implementer] [--owner NAME] [--lane NAME]\n\nOptions:\n  --roles ROLE1,ROLE2,ROLE3     Role priority order. Default drains reviewer -> verifier -> implementer.\n  --owner NAME                  Lease owner recorded in queue state. Default: claude-supervisor.\n  --lane NAME                   Restrict leasing to one lane.\n  --ttl-min N                   Override lease TTL in minutes.\n  --model MODEL                 Pass through Claude model override.\n  --max-rounds N                Stop after N leasing attempts. 0 means unbounded.\n  --sleep-ms N                  Idle polling interval in milliseconds. Default: 15000.\n  --stop-when-idle              Exit as soon as no task can be leased.\n  --heartbeat-ms N              Extend the active lease while Claude is still running. Default: 60000.\n  --idle-timeout-ms N           Kill Claude after N ms without stdout/stderr activity. Default: 900000.\n  --max-runtime-ms N            Kill Claude after N ms total runtime. Default: 3600000.\n  --kill-grace-ms N             Wait after SIGTERM before SIGKILL. Default: 5000.\n  --claude-permission-mode MODE Claude permission mode. Default: auto.\n  --claude-setting-sources SRC  Claude setting sources. Default: local.\n  --claude-output-format FMT    Claude output format. Default: stream-json.\n  --allow-slash-commands        Keep slash commands/skills enabled for the child run.\n  --allow-configured-mcp        Keep configured MCP servers enabled for the child run.\n  --allow-session-persistence   Let Claude persist headless sessions on disk.\n  --no-partial-messages         Disable partial message events in stream-json output.\n  --no-debug-file               Skip per-run Claude debug log capture.\n  --allow-telemetry             Do not disable Claude telemetry for the child run.\n\nAuto-close:\n  Successful runs auto-close only from a valid result.json handoff.\n  Missing or invalid handoffs are treated as failed unattended runs and are requeued or blocked automatically.`);
 }

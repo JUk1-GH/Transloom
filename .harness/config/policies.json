@@ -53,10 +53,11 @@
         "npm run lint",
         "npm run typecheck",
         "npm run test",
-        "npm run build:desktop"
+        "npm run build:desktop",
+        "npm run harness:desktop-smoke"
       ],
       "manual": [
-        "Run desktop shell or screenshot capture smoke test"
+        "Inspect the desktop smoke result and confirm whether the real screenshot capture chain passed or is blocked by permissions/environment"
       ]
     },
     "persistence": {

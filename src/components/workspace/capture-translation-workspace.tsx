@@ -10,6 +10,7 @@ import { desktopClient } from '@/lib/ipc/desktop-client';
 
 type RuntimeSnapshot = {
   runtimeMode: 'real' | 'mock';
+  status?: 'ready' | 'provider-missing' | 'model-missing' | 'api-key-missing' | 'mock-fallback';
   baseUrl: string | null;
   model: string | null;
   hasApiKey: boolean;
@@ -17,6 +18,8 @@ type RuntimeSnapshot = {
     baseUrl: string;
     model: string;
     hasApiKey: boolean;
+    enabled?: boolean;
+    label?: string;
   };
 };
 
@@ -39,29 +42,46 @@ const mockOverlay: OverlayDocument = {
     { id: 'region-1', sourceText: 'Settings', translatedText: '设置', box: { x: 72, y: 94, width: 180, height: 52 }, backgroundColor: 'rgba(255,255,255,0.88)', fontSize: 18 },
     { id: 'region-2', sourceText: 'Start translating', translatedText: '开始翻译', box: { x: 118, y: 190, width: 240, height: 56 }, backgroundColor: 'rgba(196,181,253,0.9)', fontSize: 18 },
   ],
-  warning: '当前为浏览器预览，展示的是内置 mock overlay。',
 };
 
-const selectClassName = 'h-9 w-full rounded-[10px] border border-[#d1d1d1] bg-white px-3 text-sm text-[#111111] outline-none transition focus:border-[#8cb3f5]';
+const selectClassName = 'h-8 w-full rounded-[9px] border border-[#d1d1d1] bg-white px-3 text-sm text-[#111111] outline-none transition focus:border-[#8cb3f5]';
+
+function getRuntimeModeLabel(isBootstrapping: boolean, desktopAvailable: boolean, runtimeMode?: 'real' | 'mock') {
+  if (!desktopAvailable) {
+    return 'Mock 预览';
+  }
+
+  if (isBootstrapping) {
+    return '读取中';
+  }
+
+  return runtimeMode === 'real' ? '真实模式' : 'Mock 预览';
+}
+
+function getSurfaceLabel(desktopAvailable: boolean) {
+  return desktopAvailable ? 'Electron 桌面端' : '浏览器预览';
+}
 
 export function CaptureTranslationWorkspace({
   capabilities,
   refreshing,
-  onRefreshCapabilities,
-  onOpenAccessibilitySettings,
-  onOpenScreenRecordingSettings,
+  onRefreshCapabilitiesAction,
+  onOpenAccessibilitySettingsAction,
+  onOpenScreenRecordingSettingsAction,
   compact = false,
 }: {
   capabilities?: DesktopCapabilities | null;
   refreshing?: boolean;
-  onRefreshCapabilities?: () => void;
-  onOpenAccessibilitySettings?: () => void;
-  onOpenScreenRecordingSettings?: () => void;
+  onRefreshCapabilitiesAction?: () => void;
+  onOpenAccessibilitySettingsAction?: () => void;
+  onOpenScreenRecordingSettingsAction?: () => void;
   compact?: boolean;
 }) {
   const [runtime, setRuntime] = useState<RuntimeSnapshot | null>(null);
   const [overlay, setOverlay] = useState<OverlayDocument | null>(null);
-  const [message, setMessage] = useState('点击“开始截图”选择屏幕区域。');
+  const [message, setMessage] = useState(() => (
+    desktopClient.isAvailable() ? '点击“开始截图”选择屏幕区域。' : '先确认目标语言，再预览 Mock Overlay 效果。'
+  ));
   const [latestCapturePath, setLatestCapturePath] = useState<string | null>(null);
   const [recentCaptureIssue, setRecentCaptureIssue] = useState<string | null>(null);
   const [captureWindowState, setCaptureWindowState] = useState<'idle' | 'open'>('idle');
@@ -69,10 +89,10 @@ export function CaptureTranslationWorkspace({
   const [isTranslating, setIsTranslating] = useState(false);
   const [isBootstrapping, setIsBootstrapping] = useState(true);
   const desktopAvailable = desktopClient.isAvailable();
-  const captureDisabledReason = !desktopAvailable
-    ? '浏览器预览环境不能做系统级截图。'
-    : isBootstrapping
-      ? '正在读取桌面运行时和最近截图。'
+  const captureDisabledReason = desktopAvailable && isBootstrapping
+    ? '正在读取桌面运行时和最近截图。'
+    : !desktopAvailable
+      ? null
       : !capabilities?.screenRecording?.granted
         ? '还没有屏幕录制权限。'
         : isTranslating
@@ -214,12 +234,6 @@ export function CaptureTranslationWorkspace({
     };
   }, [desktopAvailable, isTranslating, runCaptureTranslation]);
 
-  function handlePreviewMockOverlay() {
-    setOverlay(mockOverlay);
-    setRecentCaptureIssue(null);
-    setMessage('当前为浏览器预览，已加载内置 mock overlay。');
-  }
-
   async function handleOpenCaptureWindow() {
     setCaptureWindowState('open');
     setRecentCaptureIssue(null);
@@ -246,76 +260,86 @@ export function CaptureTranslationWorkspace({
             }
           : !desktopAvailable
             ? {
-                title: '浏览器预览模式',
-                detail: '你可以先用内置 mock overlay 看效果。',
+                title: '等待预览结果',
+                detail: '点击左侧按钮后，这里会显示 mock overlay。',
               }
             : {
                 title: '尚未开始截图',
                 detail: '打开框选窗口后，结果会显示在这里。',
               };
 
+  const runtimeModeLabel = getRuntimeModeLabel(isBootstrapping, desktopAvailable, runtime?.runtimeMode);
+  const surfaceLabel = getSurfaceLabel(desktopAvailable);
+  const overlayModeLabel = overlay?.mode === 'real' ? '真实模式' : overlay?.mode === 'mock' ? 'Mock 模式' : null;
   const showPermissionOnboarding = Boolean(capabilities && (!capabilities.accessibility.granted || !capabilities.screenRecording?.granted));
 
   return (
-    <div className={compact ? 'space-y-4' : 'grid gap-4 xl:grid-cols-[320px_minmax(0,1fr)]'}>
-      <div className='space-y-4'>
+    <div className={compact ? 'space-y-3' : 'grid gap-2 md:grid-cols-[248px_minmax(0,1fr)] md:items-start'}>
+      <div className='space-y-2'>
         <section className='rounded-[14px] border border-[#d2d2d2] bg-[#f6f6f6]'>
-          <div className='border-b border-[#dddddd] px-4 py-3'>
+          <div className='border-b border-[#dddddd] px-3.5 py-2.5'>
             <div className='text-[15px] font-medium text-[#111111]'>截图翻译</div>
           </div>
 
-          <div className='space-y-4 px-4 py-4'>
-            <div className='grid gap-px overflow-hidden rounded-[10px] border border-[#d8d8d8] bg-[#d8d8d8]'>
-              <div className='bg-white px-3 py-2 text-sm text-[#555555]'>环境：{desktopAvailable ? 'Electron desktop' : 'Browser preview'}</div>
-              <div className='bg-white px-3 py-2 text-sm text-[#555555]'>模式：{isBootstrapping ? '读取中' : runtime?.runtimeMode === 'real' ? 'Real' : 'Mock'}</div>
-              <div className='bg-white px-3 py-2 text-sm text-[#555555]'>截图窗口：{captureWindowState === 'open' ? '已打开' : '空闲'}</div>
+          <div className='space-y-2.5 px-3.5 py-3'>
+            <div className='flex flex-wrap gap-1.5 text-[11px] text-[#666666]'>
+              <span className='rounded-full border border-[#d7d7d7] bg-white px-2 py-1'>环境：{surfaceLabel}</span>
+              <span className='rounded-full border border-[#d7d7d7] bg-white px-2 py-1'>模式：{runtimeModeLabel}</span>
+              {desktopAvailable ? (
+                <span className='rounded-full border border-[#d7d7d7] bg-white px-2 py-1'>窗口：{captureWindowState === 'open' ? '已打开' : '待命'}</span>
+              ) : null}
             </div>
 
-            <div className='space-y-2'>
-              <label htmlFor='capture-target-lang' className='text-xs text-[#777777]'>目标语言</label>
-              <select id='capture-target-lang' value={targetLang} onChange={(event) => setTargetLang(event.target.value)} className={selectClassName}>
-                {Object.entries(languageLabels).map(([value, label]) => (
-                  <option key={value} value={value}>
-                    {label}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div className='rounded-[10px] border border-[#d9d9d9] bg-white px-3 py-3 text-sm text-[#555555]'>
-              {message}
+            <div className='space-y-2 rounded-[10px] bg-white/80 px-3 py-2.5'>
+              <div className='flex items-start justify-between gap-2'>
+                <div className='text-[13px] leading-5 text-[#555555]'>{message}</div>
+                {!desktopAvailable ? <span className='shrink-0 rounded-full border border-[#d7d7d7] bg-[#f5f5f5] px-2 py-1 text-[11px] text-[#666666]'>Mock</span> : null}
+              </div>
+              <div className='space-y-1'>
+                <label htmlFor='capture-target-lang' className='block text-[11px] text-[#777777]'>目标语言</label>
+                <select id='capture-target-lang' value={targetLang} onChange={(event) => setTargetLang(event.target.value)} className={selectClassName}>
+                  {Object.entries(languageLabels).map(([value, label]) => (
+                    <option key={value} value={value}>
+                      {label}
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
 
             {captureDisabledReason ? (
-              <div className='rounded-[10px] border border-[#e3d7b6] bg-[#fbf7ec] px-3 py-3 text-sm text-[#7a6931]'>
+              <div className='rounded-[10px] border border-[#e3d7b6] bg-[#fbf7ec] px-3 py-2 text-[13px] leading-5 text-[#7a6931]'>
                 {captureDisabledReason}
               </div>
             ) : null}
 
             {recentCaptureIssue ? (
-              <div className='rounded-[10px] border border-[#e3c8c1] bg-[#fdf1ee] px-3 py-3 text-sm text-[#955448]'>
+              <div className='rounded-[10px] border border-[#e3c8c1] bg-[#fdf1ee] px-3 py-2 text-[13px] leading-5 text-[#955448]'>
                 {recentCaptureIssue}
               </div>
             ) : null}
 
-            <div className='flex flex-wrap gap-2'>
-              <Button onClick={() => void handleOpenCaptureWindow()} disabled={Boolean(captureDisabledReason)} className='flex-1 justify-center'>
-                开始截图
+            <div className='grid gap-1.5'>
+              <Button
+                onClick={desktopAvailable
+                  ? () => void handleOpenCaptureWindow()
+                  : () => {
+                      setOverlay(mockOverlay);
+                      setRecentCaptureIssue(null);
+                      setMessage('当前为浏览器预览，已加载内置 mock overlay。');
+                    }}
+                disabled={Boolean(captureDisabledReason)}
+                className='w-full justify-center'
+              >
+                {desktopAvailable ? '开始截图' : '预览 Mock Overlay'}
               </Button>
-              <Button variant='secondary' onClick={() => latestCapturePath && void runCaptureTranslation(latestCapturePath)} disabled={!latestCapturePath || isTranslating} className='flex-1 justify-center'>
+              <Button variant='secondary' onClick={() => latestCapturePath && void runCaptureTranslation(latestCapturePath)} disabled={!latestCapturePath || isTranslating} className='w-full justify-center'>
                 重新翻译
               </Button>
+              <Link href='/settings' className='block rounded-[10px] border border-[#d1d1d1] bg-white px-3 py-2 text-[13px] leading-5 text-[#4f4f4f] transition hover:bg-[#f9f9f9]'>
+                打开设置，检查 provider 与权限
+              </Link>
             </div>
-
-            {!desktopAvailable ? (
-              <Button variant='secondary' onClick={handlePreviewMockOverlay} className='w-full justify-center'>
-                预览 Mock Overlay
-              </Button>
-            ) : null}
-
-            <Link href='/settings' className='block rounded-[10px] border border-[#d1d1d1] bg-white px-3 py-2.5 text-sm text-[#4f4f4f] transition hover:bg-[#f9f9f9]'>
-              打开设置，检查 provider 与权限
-            </Link>
           </div>
         </section>
 
@@ -323,36 +347,36 @@ export function CaptureTranslationWorkspace({
           <PermissionOnboarding
             capabilities={capabilities ?? null}
             refreshing={refreshing}
-            onRefresh={onRefreshCapabilities}
-            onOpenAccessibilitySettings={onOpenAccessibilitySettings}
-            onOpenScreenRecordingSettings={onOpenScreenRecordingSettings}
+            onRefreshAction={onRefreshCapabilitiesAction}
+            onOpenAccessibilitySettingsAction={onOpenAccessibilitySettingsAction}
+            onOpenScreenRecordingSettingsAction={onOpenScreenRecordingSettingsAction}
           />
         ) : null}
       </div>
 
       <section className='overflow-hidden rounded-[14px] border border-[#d2d2d2] bg-[#f6f6f6]'>
-        <div className='flex flex-wrap items-center justify-between gap-2 border-b border-[#dddddd] px-4 py-3'>
+        <div className='flex flex-wrap items-center justify-between gap-2 border-b border-[#dddddd] px-3.5 py-2.5'>
           <div className='text-[15px] font-medium text-[#111111]'>覆盖层结果</div>
-          <div className='flex flex-wrap gap-2 text-xs text-[#6a6a6a]'>
-            <span>模式：{overlay?.mode ?? 'pending'}</span>
-            <span>Provider：{overlay?.provider ?? 'pending'}</span>
+          <div className='flex flex-wrap gap-2 text-[11px] text-[#6a6a6a]'>
+            {overlayModeLabel ? <span>模式：{overlayModeLabel}</span> : null}
+            {overlay?.provider ? <span>Provider：{overlay.provider}</span> : null}
             <span>目标语言：{languageLabels[targetLang] ?? targetLang}</span>
           </div>
         </div>
 
-        <div className='p-4'>
+        <div className='p-2.5'>
           {overlay ? (
             <TranslationOverlay overlay={overlay} />
           ) : (
-            <div className='rounded-[12px] border border-dashed border-[#d0d0d0] bg-white px-4 py-6'>
+            <div className='rounded-[12px] border border-dashed border-[#d0d0d0] bg-white px-4 py-5'>
               <div className='text-sm font-medium text-[#111111]'>{overlayEmptyState?.title}</div>
-              <div className='mt-2 text-sm leading-6 text-[#666666]'>{overlayEmptyState?.detail}</div>
+              <div className='mt-1.5 text-[13px] leading-5 text-[#666666]'>{overlayEmptyState?.detail}</div>
             </div>
           )}
         </div>
 
         {overlay?.warning ? (
-          <div className='border-t border-[#dddddd] bg-[#fbf7ec] px-4 py-3 text-sm text-[#7a6931]'>
+          <div className='border-t border-[#dddddd] bg-[#fbf7ec] px-3.5 py-2.5 text-[13px] leading-5 text-[#7a6931]'>
             {overlay.warning}
           </div>
         ) : null}

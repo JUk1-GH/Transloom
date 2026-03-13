@@ -170,13 +170,13 @@ function CaptureWorkspacePage() {
   }
 
   return (
-    <AppShell title='截图翻译' description='保留真实截图链路，但把界面收敛成更直接的桌面工具形态。'>
+    <AppShell title='截图翻译'>
       <CaptureTranslationWorkspace
         capabilities={capabilities}
         refreshing={refreshing}
-        onRefreshCapabilities={() => void handleRefreshCapabilities()}
-        onOpenAccessibilitySettings={() => void desktopClient.openAccessibilitySettings()}
-        onOpenScreenRecordingSettings={() => void desktopClient.openScreenRecordingSettings()}
+        onRefreshCapabilitiesAction={() => void handleRefreshCapabilities()}
+        onOpenAccessibilitySettingsAction={() => void desktopClient.openAccessibilitySettings()}
+        onOpenScreenRecordingSettingsAction={() => void desktopClient.openScreenRecordingSettings()}
       />
     </AppShell>
   );
@@ -184,7 +184,13 @@ function CaptureWorkspacePage() {
 
 function CapturePageContent() {
   const searchParams = useSearchParams();
-  return searchParams.get('mode') === 'overlay' ? <CaptureOverlayMode /> : <CaptureWorkspacePage />;
+  const mode = searchParams.get('mode');
+
+  if (mode === 'overlay') {
+    return <CaptureOverlayMode />;
+  }
+
+  return <CaptureWorkspacePage />;
 }
 
 export default function CapturePage() {

@@ -50,7 +50,16 @@ dist-electron
 .playwright-mcp
 .release/
 release/
+.harness/logs/
+.harness/product-runs/
+.harness/desktop-smoke/
 .harness/state/
 .harness/runs/
 translate-*.png
 translate-snapshot.md
+/.serena/
+/capture-errors.log
+/round*.png
+/round*.md
+/history-*.png
+/settings-*.png

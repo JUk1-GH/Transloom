@@ -76,6 +76,7 @@ npm run harness:watch
 npm run harness:drain
 npm run harness:autopilot
 npm run harness:product-loop
+npm run harness:desktop-smoke
 npm run harness:ft-autopilot
 npm run harness:settle
 npm run harness:supervise-loop -- --roles implementer,verifier,reviewer --owner claude-local --max-rounds 3
@@ -108,6 +109,7 @@ npm run harness -- fail --task FT-001 --role implementer --owner claude-local --
 
 - `product-loop.mjs` is the open-ended product iteration path. It is not driven by one FT ticket.
 - `product-loop-launcher.mjs` starts that loop as a detached background daemon so it can survive the launching shell.
+- `desktop-smoke.mjs` is the desktop-only validation path for Electron shell, capture window, and real screenshot-capture service checks. It should be the first validation step for overlay or screenshot-chain bugs.
 - It boots or reuses a live web surface, prompts Claude to use the actual product, find rough edges, fix the highest-value issue, re-test the flow, and then continue to the next small win.
 - Each round writes a durable prompt pack, `session.log`, `claude.debug.log`, and `result.json` under `.harness/product-runs/<run-id>/`.
 - Before every round it also rebuilds `.harness/state/product-memory.json` from historical `result.json` handoffs so the next prompt is driven by long-term memory instead of only the latest summary.
@@ -118,6 +120,7 @@ npm run harness -- fail --task FT-001 --role implementer --owner claude-local --
 - `harness:autopilot` now launches the product-iteration loop in detached background mode.
 - `harness:autopilot:status` reports whether the detached loop is still alive.
 - `harness:autopilot:stop` sends `SIGTERM` to the detached loop.
+- `harness:desktop-smoke` launches the Electron app in a harness-enabled development mode, opens the capture window, simulates a real region-capture selection through the main process, and stores evidence plus a `result.json` under `.harness/desktop-smoke/`.
 - `harness:product-loop` still runs the same loop in the foreground for debugging.
 - The old FT queue autopilot is still available as `harness:ft-autopilot`.
 

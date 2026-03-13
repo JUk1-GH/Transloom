@@ -5,8 +5,7 @@ import { usePathname } from 'next/navigation';
 import clsx from 'clsx';
 
 const navItems = [
-  { label: '翻译文本', href: '/', match: ['/', '/translate'] },
-  { label: '截图翻译', href: '/capture', match: ['/capture'] },
+  { label: '翻译工作区', href: '/', match: ['/', '/translate', '/capture'] },
   { label: '历史记录', href: '/history', match: ['/history'] },
   { label: '术语表', href: '/glossary', match: ['/glossary'] },
   { label: '设置', href: '/settings', match: ['/settings'] },
@@ -27,17 +26,17 @@ export function AppShell({
   children,
 }: {
   title: string;
-  description: string;
+  description?: string;
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
 
   return (
-    <div className='min-h-screen bg-[#ececec] text-[#111111]'>
-      <div className='flex min-h-screen w-full flex-col bg-[#ececec]'>
-        <header className='flex h-12 items-center gap-4 border-b border-black/10 bg-[#121212] px-4 text-white'>
+    <div className='h-screen overflow-hidden bg-[#ececec] text-[#111111]'>
+      <div className='flex h-screen w-full flex-col bg-[#ececec]'>
+        <header className='drag-region flex h-11 items-center gap-3 border-b border-black/10 bg-[#121212] px-4 pr-4 text-white md:pl-[88px]'>
 
-          <nav className='hidden min-w-0 items-center gap-1 overflow-x-auto md:flex'>
+          <nav className='no-drag hidden min-w-0 items-center gap-1 overflow-x-auto md:flex'>
             {navItems.map((item) => {
               const active = isActive(pathname, item.match);
 
@@ -58,7 +57,7 @@ export function AppShell({
             })}
           </nav>
 
-          <div className='ml-auto hidden items-center gap-2 md:flex'>
+          <div className='no-drag ml-auto hidden items-center gap-2 md:flex'>
             {utilityItems.map((item) => {
               const active = pathname.startsWith(item.href);
 
@@ -81,12 +80,14 @@ export function AppShell({
           </div>
         </header>
 
-        <div className='border-b border-[#d5dbe3] bg-[#dce6f4] px-4 py-2 text-xs text-[#42536f]'>
-          {description}
-        </div>
+        {description ? (
+          <div className='border-b border-[#d5dbe3] bg-[#dce6f4] px-4 py-1.5 text-[11px] text-[#42536f]'>
+            {description}
+          </div>
+        ) : null}
 
         <div className='border-b border-[#d7d7d7] bg-[#ececec] px-4 py-2 md:hidden'>
-          <nav className='flex gap-2 overflow-x-auto pb-1'>
+          <nav className='no-drag flex gap-2 overflow-x-auto pb-1'>
             {navItems.map((item) => {
               const active = isActive(pathname, item.match);
 
@@ -109,7 +110,7 @@ export function AppShell({
         </div>
 
         <main aria-label={title} className='app-scrollbar flex-1 overflow-auto bg-[#ebebeb]'>
-          <div className='min-h-full p-4 md:p-5'>{children}</div>
+          <div className='h-full p-3 md:p-4'>{children}</div>
         </main>
       </div>
     </div>

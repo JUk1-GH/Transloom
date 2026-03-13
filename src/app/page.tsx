@@ -191,8 +191,8 @@ export default function Home() {
   }
 
   return (
-    <AppShell title='翻译文本' description='输入、截图和小窗结果都回到同一个工作区。'>
-      <div ref={workspaceSectionRef}>
+    <AppShell title='翻译文本'>
+      <div ref={workspaceSectionRef} className='h-full'>
         <TextTranslationWorkspace
           initialSource=''
           workspaceDraft={workspaceDraft}
@@ -228,23 +228,23 @@ export default function Home() {
                   scrollToWorkspace();
                 }
               : undefined,
-            actionDisabledReason: !capabilities?.desktopAvailable
-              ? '当前是浏览器预览环境，系统级截图仅在 Electron 桌面端可用。'
-              : !capabilities?.screenRecording?.granted
+            actionDisabledReason: capabilities?.desktopAvailable
+              ? !capabilities?.screenRecording?.granted
                 ? '还没有“屏幕录制”权限。'
-                : null,
+                : null
+              : null,
             desktopAvailable: Boolean(capabilities?.desktopAvailable),
           }}
-          sidebarBottom={(
+          sidebarBottom={capabilities ? (
             <PermissionOnboarding
               capabilities={capabilities}
               refreshing={refreshing}
-              onRefresh={() => void handleRefreshCapabilities()}
-              onOpenAccessibilitySettings={() => void desktopClient.openAccessibilitySettings()}
-              onOpenScreenRecordingSettings={() => void desktopClient.openScreenRecordingSettings()}
+              onRefreshAction={() => void handleRefreshCapabilities()}
+              onOpenAccessibilitySettingsAction={() => void desktopClient.openAccessibilitySettings()}
+              onOpenScreenRecordingSettingsAction={() => void desktopClient.openScreenRecordingSettings()}
               prominent
             />
-          )}
+          ) : null}
         />
       </div>
     </AppShell>

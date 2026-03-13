@@ -1,6 +1,7 @@
-import { app, BrowserWindow, ipcMain } from 'electron';
+import { app, BrowserWindow, ipcMain, screen } from 'electron';
 import type { ChildProcess } from 'node:child_process';
 import { spawn } from 'node:child_process';
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { access, copyFile, mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import type { CaptureSelectionPayload } from '@/domain/capture/types';
@@ -9,15 +10,29 @@ import { createAccessibilityService } from './services/accessibility.service';
 import { createHotkeyService } from './services/hotkey.service';
 import { createPopupStateService } from './services/popup-state.service';
 import { createRegionCaptureService } from './services/region-capture.service';
-import { createSecureConfigService } from './services/secure-config.service';
+import { createSecureConfigService, type SecureSettingsData, type RuntimeMode } from './services/secure-config.service';
 import { createSelectedTextService } from './services/selected-text.service';
 import { createWindowManager } from './services/window-manager.service';
 import { createWorkspaceDraftService } from './services/workspace-draft.service';
 
 const PROD_PORT = 3232;
 const DEV_WEB_PORT = process.env.TRANSLOOM_WEB_PORT ?? '3003';
+const HARNESS_ENABLED = process.env.TRANSLOOM_HARNESS === '1';
+const HARNESS_DEFAULT_SETTINGS: SecureSettingsData = {
+  provider: {
+    baseUrl: 'https://api.openai.com/v1',
+    model: 'gpt-4.1-mini',
+  },
+  defaultTargetLang: 'zh-CN',
+  shortcut: 'CommandOrControl+Shift+2',
+};
+const HARNESS_PORT = (() => {
+  const value = Number(process.env.TRANSLOOM_HARNESS_PORT ?? '37731');
+  return Number.isFinite(value) && value > 0 ? value : 37731;
+})();
 
 let rendererServer: ChildProcess | null = null;
+let harnessServer: Server | null = null;
 const secureConfigService = createSecureConfigService();
 const accessibilityService = createAccessibilityService();
 const hotkeyService = createHotkeyService();
@@ -28,6 +43,16 @@ const workspaceDraftService = createWorkspaceDraftService();
 const windowManager = createWindowManager(path.join(__dirname, 'preload.js'));
 let currentShortcut = hotkeyService.defaultShortcut;
 let latestCapture: { filePath: string; capturedAt: string } | null = null;
+let shortcutRegistrationIssue: string | null = null;
+let harnessSettings: SecureSettingsData = cloneHarnessSettings();
+
+function cloneHarnessSettings(): SecureSettingsData {
+  return {
+    provider: { ...HARNESS_DEFAULT_SETTINGS.provider },
+    defaultTargetLang: HARNESS_DEFAULT_SETTINGS.defaultTargetLang,
+    shortcut: HARNESS_DEFAULT_SETTINGS.shortcut,
+  };
+}
 
 function isDevelopment() {
   return process.env.NODE_ENV === 'development' || Boolean(process.env.ELECTRON_START_URL);
@@ -130,6 +155,22 @@ function getDesktopCapabilities() {
 }
 
 async function getDesktopSettings() {
+  if (HARNESS_ENABLED) {
+    const runtimeSnapshot = getHarnessRuntimeMode();
+    return {
+      shortcut: harnessSettings.shortcut,
+      desktopMode: true,
+      defaultTargetLang: harnessSettings.defaultTargetLang,
+      runtimeMode: runtimeSnapshot.runtimeMode,
+      provider: {
+        baseUrl: harnessSettings.provider.baseUrl,
+        model: harnessSettings.provider.model,
+        apiKeyMasked: maskApiKey(harnessSettings.provider.apiKey),
+        hasApiKey: Boolean(harnessSettings.provider.apiKey),
+      },
+    };
+  }
+
   const settings = await secureConfigService.getSettings();
   const runtimeSnapshot = await secureConfigService.getRuntimeMode();
   currentShortcut = settings.shortcut || hotkeyService.defaultShortcut;
@@ -146,6 +187,53 @@ async function getDesktopSettings() {
       hasApiKey: Boolean(settings.provider.apiKey),
     },
   };
+}
+
+function getHarnessRuntimeMode() {
+  const hasApiKey = Boolean(harnessSettings.provider.apiKey?.trim());
+  return {
+    runtimeMode: (hasApiKey ? 'real' : 'mock') as RuntimeMode,
+    baseUrl: harnessSettings.provider.baseUrl || null,
+    model: harnessSettings.provider.model || null,
+    hasApiKey,
+    provider: {
+      baseUrl: harnessSettings.provider.baseUrl,
+      model: harnessSettings.provider.model,
+      hasApiKey,
+    },
+  };
+}
+
+function getHarnessProviderSecret() {
+  return {
+    baseUrl: harnessSettings.provider.baseUrl,
+    model: harnessSettings.provider.model,
+    apiKey: harnessSettings.provider.apiKey ?? null,
+  };
+}
+
+function applyHarnessSettings(payload: {
+  shortcut?: string;
+  defaultTargetLang?: string;
+  provider?: {
+    baseUrl?: string;
+    model?: string;
+    apiKey?: string;
+  };
+}) {
+  harnessSettings = {
+    provider: {
+      baseUrl: payload.provider?.baseUrl?.trim() || harnessSettings.provider.baseUrl || HARNESS_DEFAULT_SETTINGS.provider.baseUrl,
+      model: payload.provider?.model?.trim() || harnessSettings.provider.model || HARNESS_DEFAULT_SETTINGS.provider.model,
+      apiKey: payload.provider?.apiKey === undefined
+        ? harnessSettings.provider.apiKey
+        : payload.provider.apiKey?.trim() || undefined,
+    },
+    defaultTargetLang: payload.defaultTargetLang?.trim() || harnessSettings.defaultTargetLang || HARNESS_DEFAULT_SETTINGS.defaultTargetLang,
+    shortcut: payload.shortcut?.trim() || harnessSettings.shortcut || HARNESS_DEFAULT_SETTINGS.shortcut,
+  };
+  currentShortcut = harnessSettings.shortcut;
+  return harnessSettings;
 }
 
 function notifyCaptureWindowClosed(reason: 'closed' | 'blurred', message?: string) {
@@ -165,15 +253,210 @@ function clearLatestCapture() {
   latestCapture = null;
 }
 
+function serializeWindow(window: BrowserWindow | null) {
+  if (!window || window.isDestroyed()) {
+    return {
+      exists: false,
+      visible: false,
+      bounds: null,
+    };
+  }
+
+  return {
+    exists: true,
+    visible: window.isVisible(),
+    focused: window.isFocused(),
+    bounds: window.getBounds(),
+  };
+}
+
+function getHarnessState(rendererUrl: string) {
+  return {
+    ready: true,
+    rendererUrl,
+    latestCapture,
+    shortcutRegistrationIssue,
+    mainWindow: serializeWindow(windowManager.getMainWindow()),
+    captureWindow: serializeWindow(windowManager.getCaptureWindow()),
+    popupWindow: serializeWindow(windowManager.getPopupWindow()),
+  };
+}
+
+function electronScreenSnapshot() {
+  const primaryDisplay = screen.getPrimaryDisplay();
+  return {
+    id: primaryDisplay.id,
+    bounds: primaryDisplay.bounds,
+    workArea: primaryDisplay.workArea,
+    scaleFactor: primaryDisplay.scaleFactor,
+  };
+}
+
+function createDefaultHarnessSelection(): CaptureSelectionPayload {
+  const primaryDisplay = screen.getPrimaryDisplay();
+  const width = Math.max(320, Math.round(primaryDisplay.workArea.width * 0.28));
+  const height = Math.max(220, Math.round(primaryDisplay.workArea.height * 0.24));
+  const x = primaryDisplay.workArea.x + Math.round((primaryDisplay.workArea.width - width) / 2);
+  const y = primaryDisplay.workArea.y + Math.round((primaryDisplay.workArea.height - height) / 2);
+
+  return {
+    x,
+    y,
+    width,
+    height,
+    scaleFactor: primaryDisplay.scaleFactor,
+    displayId: primaryDisplay.id,
+  };
+}
+
+function isCaptureSelectionPayload(value: unknown): value is CaptureSelectionPayload {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+
+  const candidate = value as Partial<CaptureSelectionPayload>;
+  return ['x', 'y', 'width', 'height', 'scaleFactor'].every((key) => Number.isFinite(candidate[key as keyof CaptureSelectionPayload] as number));
+}
+
+async function executeCaptureSelection(payload: CaptureSelectionPayload) {
+  const result = await regionCaptureService.captureSelection(payload);
+  latestCapture = result;
+  const captureWindow = windowManager.getCaptureWindow();
+  const mainWindow = windowManager.getMainWindow();
+
+  if (captureWindow && !captureWindow.isDestroyed()) {
+    captureWindow.webContents.send(settingsChannels.captureCompleted, result);
+  }
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send(settingsChannels.captureCompleted, result);
+  }
+
+  windowManager.hideCaptureWindow();
+  notifyCaptureWindowClosed('closed', '截图窗口已完成并关闭。');
+  windowManager.showMainWindow();
+  return result;
+}
+
+async function readJsonBody(request: IncomingMessage) {
+  const chunks: Buffer[] = [];
+  for await (const chunk of request) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+
+  if (chunks.length === 0) {
+    return {};
+  }
+
+  return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+}
+
+function sendJson(response: ServerResponse, statusCode: number, payload: unknown) {
+  response.writeHead(statusCode, { 'content-type': 'application/json; charset=utf-8' });
+  response.end(JSON.stringify(payload, null, 2));
+}
+
+async function captureWindowPng(window: BrowserWindow | null) {
+  if (!window || window.isDestroyed()) {
+    throw new Error('window is not available');
+  }
+
+  const image = await window.webContents.capturePage();
+  return image.toPNG();
+}
+
+async function startHarnessServer(rendererUrl: string) {
+  if (!HARNESS_ENABLED || harnessServer) {
+    return;
+  }
+
+  harnessServer = createServer(async (request, response) => {
+    try {
+      const url = new URL(request.url ?? '/', 'http://127.0.0.1');
+      console.log(`[harness] ${request.method ?? 'GET'} ${url.pathname}`);
+
+      if (request.method === 'GET' && url.pathname === '/health') {
+        sendJson(response, 200, getHarnessState(rendererUrl));
+        return;
+      }
+
+      if (request.method === 'POST' && url.pathname === '/capture/show') {
+        windowManager.showCaptureWindow();
+        sendJson(response, 200, getHarnessState(rendererUrl));
+        return;
+      }
+
+      if (request.method === 'POST' && url.pathname === '/capture/hide') {
+        windowManager.hideCaptureWindow();
+        sendJson(response, 200, getHarnessState(rendererUrl));
+        return;
+      }
+
+      if (request.method === 'POST' && url.pathname === '/capture/simulate') {
+        const body = await readJsonBody(request);
+        const payload = isCaptureSelectionPayload((body as { selection?: unknown }).selection)
+          ? (body as { selection: CaptureSelectionPayload }).selection
+          : createDefaultHarnessSelection();
+
+        try {
+          const result = await executeCaptureSelection(payload);
+          sendJson(response, 200, {
+            status: 'passed',
+            selection: payload,
+            result,
+            state: getHarnessState(rendererUrl),
+          });
+        } catch (error) {
+          const capabilities = getDesktopCapabilities();
+          const message = error instanceof Error ? error.message : 'unknown capture failure';
+          sendJson(response, capabilities.screenRecording.granted ? 500 : 200, {
+            status: capabilities.screenRecording.granted ? 'failed' : 'blocked',
+            selection: payload,
+            reason: message,
+            capabilities,
+            state: getHarnessState(rendererUrl),
+          });
+        }
+        return;
+      }
+
+      if (request.method === 'GET' && url.pathname === '/window/main/screenshot') {
+        const png = await captureWindowPng(windowManager.getMainWindow());
+        response.writeHead(200, { 'content-type': 'image/png' });
+        response.end(png);
+        return;
+      }
+
+      if (request.method === 'GET' && url.pathname === '/window/capture/screenshot') {
+        const png = await captureWindowPng(windowManager.getCaptureWindow());
+        response.writeHead(200, { 'content-type': 'image/png' });
+        response.end(png);
+        return;
+      }
+
+      sendJson(response, 404, { error: 'not found' });
+    } catch (error) {
+      sendJson(response, 500, { error: error instanceof Error ? error.message : 'unknown harness error' });
+    }
+  });
+
+  await new Promise<void>((resolve, reject) => {
+    harnessServer?.once('error', reject);
+    harnessServer?.listen(HARNESS_PORT, '127.0.0.1', () => resolve());
+  });
+
+  console.log(`[harness] desktop smoke control listening on http://127.0.0.1:${HARNESS_PORT}`);
+}
+
 function createMainWindow(rendererUrl: string) {
   const mainWindow = new BrowserWindow({
-    width: 1440,
-    height: 920,
-    minWidth: 1180,
-    minHeight: 760,
+    width: 985,
+    height: 713,
+    minWidth: 920,
+    minHeight: 640,
     show: false,
-    titleBarStyle: 'hiddenInset',
-    backgroundColor: '#0b1020',
+    titleBarStyle: 'hidden',
+    trafficLightPosition: { x: 16, y: 14 },
+    backgroundColor: '#121212',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -270,166 +553,246 @@ async function translateSelectedText() {
 }
 
 function registerShortcut(shortcut: string) {
-  hotkeyService.register(shortcut, async () => {
-    const capabilities = getDesktopCapabilities();
+  try {
+    hotkeyService.register(shortcut, async () => {
+      const capabilities = getDesktopCapabilities();
 
-    if (capabilities.accessibility.granted) {
-      await translateSelectedText();
-      return;
-    }
+      if (capabilities.accessibility.granted) {
+        await translateSelectedText();
+        return;
+      }
 
-    windowManager.showCaptureWindow();
-  });
+      windowManager.showCaptureWindow();
+    });
+    shortcutRegistrationIssue = null;
+    return true;
+  } catch (error) {
+    shortcutRegistrationIssue = error instanceof Error ? error.message : 'Unable to register global shortcut.';
+    console.warn(`[shortcut] ${shortcutRegistrationIssue}`);
+    return false;
+  }
 }
 
 app.whenReady().then(async () => {
-  await ensureLocalDatabase();
-  const rendererUrl = await getRendererUrl();
-  windowManager.setRendererBaseUrl(rendererUrl);
-  windowManager.onCaptureWindowClosed((reason) => {
-    notifyCaptureWindowClosed(reason, reason === 'blurred' ? '截图窗口失焦，已结束本次框选。' : '截图窗口已关闭。');
-  });
+  try {
+    await ensureLocalDatabase();
+    const rendererUrl = await getRendererUrl();
+    windowManager.setRendererBaseUrl(rendererUrl);
+    windowManager.onCaptureWindowClosed((reason) => {
+      notifyCaptureWindowClosed(reason, reason === 'blurred' ? '截图窗口失焦，已结束本次框选。' : '截图窗口已关闭。');
+    });
 
-  createMainWindow(rendererUrl);
+    createMainWindow(rendererUrl);
+    await startHarnessServer(rendererUrl);
 
-  const initialSettings = await secureConfigService.getSettings();
-  currentShortcut = initialSettings.shortcut || hotkeyService.defaultShortcut;
-  registerShortcut(currentShortcut);
+    if (HARNESS_ENABLED) {
+      harnessSettings = cloneHarnessSettings();
+      currentShortcut = harnessSettings.shortcut;
+    } else {
+      const initialSettings = await secureConfigService.getSettings();
+      currentShortcut = initialSettings.shortcut || hotkeyService.defaultShortcut;
+      registerShortcut(currentShortcut);
+    }
 
-  ipcMain.handle(settingsChannels.get, async () => getDesktopSettings());
-  ipcMain.handle(settingsChannels.getRuntimeMode, async () => secureConfigService.getRuntimeMode());
-  ipcMain.handle(settingsChannels.getProviderSecret, async () => {
-    const settings = await secureConfigService.getSettings();
-    return {
-      baseUrl: settings.provider.baseUrl,
-      model: settings.provider.model,
-      apiKey: settings.provider.apiKey ?? null,
-    };
-  });
-  ipcMain.handle(settingsChannels.getCapabilities, async () => getDesktopCapabilities());
-  ipcMain.handle(settingsChannels.refreshCapabilities, async () => getDesktopCapabilities());
-  ipcMain.handle(settingsChannels.openAccessibilitySettings, async () => accessibilityService.openSettings());
-  ipcMain.handle(settingsChannels.openScreenRecordingSettings, async () => accessibilityService.openScreenRecordingSettings());
-
-  ipcMain.handle(
-    settingsChannels.saveSettings,
-    async (
-      _event,
-      payload: {
-        shortcut?: string;
-        defaultTargetLang?: string;
-        provider?: {
-          baseUrl?: string;
-          model?: string;
-          apiKey?: string;
-        };
-      },
-    ) => {
-      const saved = await secureConfigService.saveSettings(payload);
-      const runtimeSnapshot = await secureConfigService.getRuntimeMode();
-
-      if (payload.shortcut && payload.shortcut !== currentShortcut) {
-        currentShortcut = payload.shortcut || hotkeyService.defaultShortcut;
-        registerShortcut(currentShortcut);
+    ipcMain.handle(settingsChannels.get, async () => getDesktopSettings());
+    ipcMain.handle(settingsChannels.getRuntimeMode, async () => (HARNESS_ENABLED ? getHarnessRuntimeMode() : secureConfigService.getRuntimeMode()));
+    ipcMain.handle(settingsChannels.getProviderSecret, async () => {
+      if (HARNESS_ENABLED) {
+        return getHarnessProviderSecret();
       }
 
+      const settings = await secureConfigService.getSettings();
       return {
-        shortcut: saved.shortcut,
-        desktopMode: true,
-        defaultTargetLang: saved.defaultTargetLang,
-        runtimeMode: runtimeSnapshot.runtimeMode,
-        provider: {
-          baseUrl: saved.provider.baseUrl,
-          model: saved.provider.model,
-          apiKeyMasked: maskApiKey(saved.provider.apiKey),
-          hasApiKey: Boolean(saved.provider.apiKey),
-        },
+        baseUrl: settings.provider.baseUrl,
+        model: settings.provider.model,
+        apiKey: settings.provider.apiKey ?? null,
       };
-    },
-  );
-
-  ipcMain.handle(settingsChannels.testProviderConnection, async (_event, payload) => secureConfigService.testProviderConnection(payload));
-
-  ipcMain.handle(settingsChannels.setShortcut, async (_event, shortcut: string) => {
-    currentShortcut = shortcut || hotkeyService.defaultShortcut;
-    await secureConfigService.saveSettings({ shortcut: currentShortcut });
-    registerShortcut(currentShortcut);
-    return { shortcut: currentShortcut };
-  });
-
-  ipcMain.handle(settingsChannels.showOverlay, () => windowManager.showCaptureWindow());
-  ipcMain.handle(settingsChannels.showMainWindow, () => {
-    windowManager.hidePopupWindow();
-    return windowManager.showMainWindow();
-  });
-  ipcMain.handle(settingsChannels.hidePopupWindow, () => windowManager.hidePopupWindow());
-  ipcMain.handle(settingsChannels.showPopupWindow, () => windowManager.showPopupWindow());
-  ipcMain.handle(settingsChannels.showCaptureWindow, () => windowManager.showCaptureWindow());
-  ipcMain.handle(settingsChannels.getLatestCapture, async () => {
-    if (!latestCapture?.filePath) {
-      return null;
-    }
-
-    try {
-      await access(latestCapture.filePath);
-      return latestCapture;
-    } catch {
-      clearLatestCapture();
-      return null;
-    }
-  });
-  ipcMain.handle(settingsChannels.getPopupState, () => popupStateService.getState());
-  ipcMain.handle(settingsChannels.getWorkspaceDraft, () => workspaceDraftService.getDraft());
-  ipcMain.handle(settingsChannels.promotePopupToWorkspace, () => {
-    const popupState = popupStateService.getState();
-    if (!popupState || popupState.isLoading) {
-      return workspaceDraftService.getDraft();
-    }
-    const draft = workspaceDraftService.setDraft({
-      sourceText: popupState.sourceText,
-      translatedText: popupState.translatedText,
-      targetLang: popupState.targetLang,
-      sourceLang: popupState.sourceLang,
-      warning: popupState.warning,
-      updatedAt: new Date().toISOString(),
     });
-    windowManager.getMainWindow()?.webContents.send(settingsChannels.workspaceDraftUpdated, draft);
-    windowManager.hidePopupWindow();
-    windowManager.showMainWindow();
-    return draft;
-  });
-  ipcMain.handle(settingsChannels.cancelCaptureSelection, () => {
-    windowManager.hideCaptureWindow();
-    windowManager.getCaptureWindow()?.webContents.send(settingsChannels.captureCancelled, { filePath: null, message: '截图已取消。' });
-    notifyCaptureWindowClosed('closed', '截图窗口已关闭。');
-    return { visible: false };
-  });
-  ipcMain.handle(settingsChannels.submitCaptureSelection, async (_event, payload: CaptureSelectionPayload) => {
-    const result = await regionCaptureService.captureSelection(payload);
-    latestCapture = result;
-    const captureWindow = windowManager.getCaptureWindow();
-    const mainWindow = windowManager.getMainWindow();
+    ipcMain.handle(settingsChannels.getCapabilities, async () => getDesktopCapabilities());
+    ipcMain.handle(settingsChannels.refreshCapabilities, async () => getDesktopCapabilities());
+    ipcMain.handle(settingsChannels.openAccessibilitySettings, async () => accessibilityService.openSettings());
+    ipcMain.handle(settingsChannels.openScreenRecordingSettings, async () => accessibilityService.openScreenRecordingSettings());
 
-    if (captureWindow && !captureWindow.isDestroyed()) {
-      captureWindow.webContents.send(settingsChannels.captureCompleted, result);
-    }
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send(settingsChannels.captureCompleted, result);
-    }
+    ipcMain.handle(
+      settingsChannels.saveSettings,
+      async (
+        _event,
+        payload: {
+          shortcut?: string;
+          defaultTargetLang?: string;
+          provider?: {
+            baseUrl?: string;
+            model?: string;
+            apiKey?: string;
+          };
+        },
+      ) => {
+        if (HARNESS_ENABLED) {
+          const saved = applyHarnessSettings(payload);
+          const runtimeSnapshot = getHarnessRuntimeMode();
+          return {
+            shortcut: saved.shortcut,
+            desktopMode: true,
+            defaultTargetLang: saved.defaultTargetLang,
+            runtimeMode: runtimeSnapshot.runtimeMode,
+            provider: {
+              baseUrl: saved.provider.baseUrl,
+              model: saved.provider.model,
+              apiKeyMasked: maskApiKey(saved.provider.apiKey),
+              hasApiKey: Boolean(saved.provider.apiKey),
+            },
+          };
+        }
 
-    windowManager.hideCaptureWindow();
-    notifyCaptureWindowClosed('closed', '截图窗口已完成并关闭。');
-    windowManager.showMainWindow();
-    return result;
-  });
+        const saved = await secureConfigService.saveSettings(payload);
+        const runtimeSnapshot = await secureConfigService.getRuntimeMode();
 
-  app.on('activate', async () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      const nextRendererUrl = await getRendererUrl();
-      windowManager.setRendererBaseUrl(nextRendererUrl);
-      createMainWindow(nextRendererUrl);
-    }
-  });
+        if (payload.shortcut && payload.shortcut !== currentShortcut) {
+          currentShortcut = payload.shortcut || hotkeyService.defaultShortcut;
+          registerShortcut(currentShortcut);
+        }
+
+        return {
+          shortcut: saved.shortcut,
+          desktopMode: true,
+          defaultTargetLang: saved.defaultTargetLang,
+          runtimeMode: runtimeSnapshot.runtimeMode,
+          provider: {
+            baseUrl: saved.provider.baseUrl,
+            model: saved.provider.model,
+            apiKeyMasked: maskApiKey(saved.provider.apiKey),
+            hasApiKey: Boolean(saved.provider.apiKey),
+          },
+        };
+      },
+    );
+
+    ipcMain.handle(settingsChannels.testProviderConnection, async (_event, payload) => {
+      if (!HARNESS_ENABLED) {
+        return secureConfigService.testProviderConnection(payload);
+      }
+
+      const provider = {
+        ...harnessSettings.provider,
+        ...payload,
+        baseUrl: payload?.baseUrl?.trim() || harnessSettings.provider.baseUrl,
+        model: payload?.model?.trim() || harnessSettings.provider.model,
+        apiKey: payload?.apiKey?.trim() || harnessSettings.provider.apiKey,
+      };
+
+      if (!provider.baseUrl?.trim() || !provider.model?.trim() || !provider.apiKey?.trim()) {
+        return {
+          ok: false,
+          code: 'CONFIG_INCOMPLETE',
+          message: '请先填写 Base URL、Model 和 API Key。',
+          runtimeMode: 'mock' as RuntimeMode,
+        };
+      }
+
+      try {
+        const response = await fetch(`${provider.baseUrl.replace(/\/$/, '')}/models`, {
+          headers: {
+            Authorization: `Bearer ${provider.apiKey}`,
+          },
+        });
+
+        if (!response.ok) {
+          return {
+            ok: false,
+            code: `HTTP_${response.status}`,
+            message: `连接失败，服务返回 ${response.status}`,
+            runtimeMode: 'mock' as RuntimeMode,
+          };
+        }
+
+        return {
+          ok: true,
+          code: 'OK',
+          message: '连接成功。',
+          runtimeMode: 'real' as RuntimeMode,
+        };
+      } catch (error) {
+        return {
+          ok: false,
+          code: 'NETWORK_ERROR',
+          message: error instanceof Error ? error.message : '连接失败。',
+          runtimeMode: 'mock' as RuntimeMode,
+        };
+      }
+    });
+
+    ipcMain.handle(settingsChannels.setShortcut, async (_event, shortcut: string) => {
+      if (HARNESS_ENABLED) {
+        currentShortcut = shortcut || hotkeyService.defaultShortcut;
+        applyHarnessSettings({ shortcut: currentShortcut });
+        return { shortcut: currentShortcut };
+      }
+
+      currentShortcut = shortcut || hotkeyService.defaultShortcut;
+      await secureConfigService.saveSettings({ shortcut: currentShortcut });
+      registerShortcut(currentShortcut);
+      return { shortcut: currentShortcut };
+    });
+
+    ipcMain.handle(settingsChannels.showOverlay, () => windowManager.showCaptureWindow());
+    ipcMain.handle(settingsChannels.showMainWindow, () => {
+      windowManager.hidePopupWindow();
+      return windowManager.showMainWindow();
+    });
+    ipcMain.handle(settingsChannels.hidePopupWindow, () => windowManager.hidePopupWindow());
+    ipcMain.handle(settingsChannels.showPopupWindow, () => windowManager.showPopupWindow());
+    ipcMain.handle(settingsChannels.showCaptureWindow, () => windowManager.showCaptureWindow());
+    ipcMain.handle(settingsChannels.getLatestCapture, async () => {
+      if (!latestCapture?.filePath) {
+        return null;
+      }
+
+      try {
+        await access(latestCapture.filePath);
+        return latestCapture;
+      } catch {
+        clearLatestCapture();
+        return null;
+      }
+    });
+    ipcMain.handle(settingsChannels.getPopupState, () => popupStateService.getState());
+    ipcMain.handle(settingsChannels.getWorkspaceDraft, () => workspaceDraftService.getDraft());
+    ipcMain.handle(settingsChannels.promotePopupToWorkspace, () => {
+      const popupState = popupStateService.getState();
+      if (!popupState || popupState.isLoading) {
+        return workspaceDraftService.getDraft();
+      }
+      const draft = workspaceDraftService.setDraft({
+        sourceText: popupState.sourceText,
+        translatedText: popupState.translatedText,
+        targetLang: popupState.targetLang,
+        sourceLang: popupState.sourceLang,
+        warning: popupState.warning,
+        updatedAt: new Date().toISOString(),
+      });
+      windowManager.getMainWindow()?.webContents.send(settingsChannels.workspaceDraftUpdated, draft);
+      windowManager.hidePopupWindow();
+      windowManager.showMainWindow();
+      return draft;
+    });
+    ipcMain.handle(settingsChannels.cancelCaptureSelection, () => {
+      windowManager.hideCaptureWindow();
+      windowManager.getCaptureWindow()?.webContents.send(settingsChannels.captureCancelled, { filePath: null, message: '截图已取消。' });
+      notifyCaptureWindowClosed('closed', '截图窗口已关闭。');
+      return { visible: false };
+    });
+    ipcMain.handle(settingsChannels.submitCaptureSelection, async (_event, payload: CaptureSelectionPayload) => executeCaptureSelection(payload));
+
+    app.on('activate', async () => {
+      if (BrowserWindow.getAllWindows().length === 0) {
+        const nextRendererUrl = await getRendererUrl();
+        windowManager.setRendererBaseUrl(nextRendererUrl);
+        createMainWindow(nextRendererUrl);
+      }
+    });
+  } catch (error) {
+    console.error('[bootstrap] Electron startup failed', error);
+  }
 });
 
 app.on('window-all-closed', () => {
@@ -439,6 +802,8 @@ app.on('window-all-closed', () => {
 });
 
 app.on('before-quit', () => {
+  harnessServer?.close();
+  harnessServer = null;
   if (rendererServer) {
     rendererServer.kill();
     rendererServer = null;

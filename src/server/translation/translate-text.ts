@@ -70,12 +70,12 @@ export async function translateText(input: TranslateInput) {
       warning: glossaryApplied ? '已命中术语表并优先替换术语。' : result.warning,
     };
   } catch (error) {
-    const fallback = buildMockTranslation(input, error instanceof Error ? error.message : undefined);
+    const fallback = buildMockTranslation(nextInput, error instanceof Error ? error.message : undefined);
 
     await Promise.all([
       shouldPersistUsage
         ? recordUsage({
-            charactersTranslated: fallback.charactersBilled ?? input.text.length,
+            charactersTranslated: fallback.charactersBilled ?? nextInput.text.length,
             mode: 'text',
           })
         : Promise.resolve(),
@@ -87,7 +87,7 @@ export async function translateText(input: TranslateInput) {
             sourceLang: input.sourceLang,
             targetLang: input.targetLang,
             provider: fallback.provider,
-            charactersUsed: fallback.charactersBilled ?? input.text.length,
+            charactersUsed: fallback.charactersBilled ?? nextInput.text.length,
             success: true,
           })
         : Promise.resolve(),

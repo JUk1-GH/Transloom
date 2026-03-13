@@ -6,6 +6,7 @@ const translateRequestSchema = z.object({
   text: z.string().trim().min(1, "请输入要翻译的文本。"),
   sourceLang: z.string().trim().optional(),
   targetLang: z.string().trim().min(1, "请选择目标语言。"),
+  glossaryId: z.string().trim().optional(),
   providerId: z.string().trim().optional(),
   providerConfig: z
     .object({
@@ -23,6 +24,7 @@ export async function POST(request: Request) {
       text: body.text,
       sourceLang: body.sourceLang,
       targetLang: body.targetLang,
+      glossaryId: body.glossaryId,
       providerId: body.providerId,
       providerConfig: body.providerConfig,
     });
