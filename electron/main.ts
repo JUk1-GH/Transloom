@@ -15,6 +15,7 @@ import { createWindowManager } from './services/window-manager.service';
 import { createWorkspaceDraftService } from './services/workspace-draft.service';
 
 const PROD_PORT = 3232;
+const DEV_WEB_PORT = process.env.TRANSLOOM_WEB_PORT ?? '3003';
 
 let rendererServer: ChildProcess | null = null;
 const secureConfigService = createSecureConfigService();
@@ -87,7 +88,7 @@ async function waitForServer(url: string, timeoutMs = 20000) {
 
 async function getRendererUrl() {
   if (isDevelopment()) {
-    return process.env.ELECTRON_START_URL ?? 'http://localhost:3000';
+    return process.env.ELECTRON_START_URL ?? `http://127.0.0.1:${DEV_WEB_PORT}`;
   }
 
   const appDistRoot = path.join(process.resourcesPath, 'app-dist');

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
 import path from 'node:path';
+import net from 'node:net';
 import { spawn, spawnSync } from 'node:child_process';
 
 const ROOT = findRepoRoot(process.cwd());
@@ -32,7 +33,7 @@ const DEFAULTS = Object.freeze({
   allowSessionPersistence: false,
   enableDebugFile: true,
   disableTelemetry: true,
-  baseUrl: 'http://127.0.0.1:3000',
+  baseUrl: 'http://127.0.0.1:3003',
   ensureWeb: true,
   webBootTimeoutMs: 120_000,
   sleepMs: 10_000,
@@ -307,8 +308,7 @@ async function ensureWebSurface(options) {
     };
   }
 
-  const reachable = await isUrlReachable(options.baseUrl);
-  if (reachable) {
+  if (await isWebSurfaceHealthy(options.baseUrl)) {
     return {
       baseUrl: options.baseUrl,
       startedByScript: false,
@@ -319,7 +319,61 @@ async function ensureWebSurface(options) {
 
   const url = new URL(options.baseUrl);
   const host = url.hostname || '127.0.0.1';
-  const port = url.port || '3000';
+  const port = Number(url.port || '3003');
+  const portBusy = await isTcpPortOpen(host, port);
+
+  if (portBusy) {
+    const restartablePid = findRestartableWebServerPid();
+    if (!restartablePid) {
+      const fallback = await findAlternativeWebBaseUrl(url);
+      if (!fallback) {
+        throw new Error(`web surface is unhealthy at ${options.baseUrl}, but port ${port} is occupied by an external process and no alternate local port was available`);
+      }
+
+      console.log(`[${nowIso()}] web surface unhealthy at ${options.baseUrl}; port ${port} is occupied externally, starting managed web server at ${fallback.baseUrl}`);
+      clearNextDevArtifacts();
+      options.baseUrl = fallback.baseUrl;
+      return await startWebServer({
+        baseUrl: fallback.baseUrl,
+        host,
+        port: fallback.port,
+        webBootTimeoutMs: options.webBootTimeoutMs,
+      });
+    }
+
+    console.log(`[${nowIso()}] web surface unhealthy at ${options.baseUrl}; restarting managed web server pid ${restartablePid}`);
+    terminatePid(restartablePid);
+    clearNextDevArtifacts();
+    return await startWebServer({ baseUrl: options.baseUrl, host, port, webBootTimeoutMs: options.webBootTimeoutMs });
+  }
+
+  return await startWebServer({ baseUrl: options.baseUrl, host, port, webBootTimeoutMs: options.webBootTimeoutMs });
+}
+
+async function findAlternativeWebBaseUrl(baseUrl) {
+  const host = baseUrl.hostname || '127.0.0.1';
+  const startPort = Number(baseUrl.port || '3003') + 1;
+
+  for (let port = startPort; port < startPort + 20; port += 1) {
+    if (await isTcpPortOpen(host, port)) {
+      continue;
+    }
+    const nextUrl = new URL(baseUrl.toString());
+    nextUrl.port = String(port);
+    return {
+      port,
+      baseUrl: nextUrl.toString(),
+    };
+  }
+
+  return null;
+}
+
+function clearNextDevArtifacts() {
+  fs.rmSync(path.join(ROOT, '.next', 'dev'), { recursive: true, force: true });
+}
+
+async function startWebServer({ baseUrl, host, port, webBootTimeoutMs }) {
   const logPath = path.join(LOGS_DIR, 'product-loop.web.log');
   const logStream = fs.createWriteStream(logPath, { flags: 'a' });
   const child = spawn('npm', ['run', 'dev:web', '--', '--hostname', host, '--port', String(port)], {
@@ -338,18 +392,58 @@ async function ensureWebSurface(options) {
     logStream.end();
   });
 
-  const ready = await waitForUrl(options.baseUrl, options.webBootTimeoutMs);
+  const ready = await waitForUrl(baseUrl, webBootTimeoutMs);
   if (!ready) {
     child.kill('SIGTERM');
-    throw new Error(`web surface did not boot at ${options.baseUrl}; inspect ${logPath}`);
+    throw new Error(`web surface did not boot at ${baseUrl}; inspect ${logPath}`);
   }
 
   return {
-    baseUrl: options.baseUrl,
+    baseUrl,
     startedByScript: true,
     child,
     logPath,
   };
+}
+
+function findRestartableWebServerPid() {
+  const pid = activeWebServer?.child?.pid;
+  if (typeof pid === 'number' && pid > 0 && isPidAlive(pid)) {
+    return pid;
+  }
+
+  return null;
+}
+
+function terminatePid(pid) {
+  try {
+    process.kill(pid, 'SIGTERM');
+  } catch {
+    return;
+  }
+
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    if (!isPidAlive(pid)) {
+      return;
+    }
+    sleep(200);
+  }
+
+  try {
+    process.kill(pid, 'SIGKILL');
+  } catch {
+    return;
+  }
+}
+
+function isPidAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function prepareRound({ round, options, web }) {
@@ -1258,13 +1352,76 @@ function getCurrentBranch() {
   return (result.stdout || '').trim() || 'unknown';
 }
 
-async function isUrlReachable(url) {
+async function isWebSurfaceHealthy(baseUrl) {
+  const url = new URL(baseUrl);
+  const probeCandidates = [
+    '/',
+    '/translate',
+    '/settings',
+    '/api/provider-runtime',
+  ];
+
+  for (const pathname of probeCandidates) {
+    const probeUrl = new URL(pathname, url);
+    const result = await probeUrlHealth(probeUrl);
+    if (result.ok) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+async function probeUrlHealth(url) {
   try {
     const response = await fetch(url, { redirect: 'manual', signal: AbortSignal.timeout(1_500) });
-    return response.ok || response.status < 500;
+    if (!response.ok) {
+      return { ok: false, status: response.status };
+    }
+
+    if (url.pathname.startsWith('/api/')) {
+      const contentType = response.headers.get('content-type') || '';
+      if (!contentType.includes('application/json')) {
+        return { ok: false, status: response.status };
+      }
+      await response.json();
+      return { ok: true, status: response.status };
+    }
+
+    const body = await response.text();
+    if (/Internal Server Error/i.test(body)) {
+      return { ok: false, status: response.status };
+    }
+
+    return { ok: true, status: response.status };
   } catch {
-    return false;
+    return { ok: false, status: null };
   }
+}
+
+async function isUrlReachable(url) {
+  return await isWebSurfaceHealthy(url);
+}
+
+async function isTcpPortOpen(host, port) {
+  return await new Promise((resolve) => {
+    const socket = net.createConnection({ host, port });
+    let settled = false;
+
+    const finish = (value) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      socket.destroy();
+      resolve(value);
+    };
+
+    socket.setTimeout(1_500);
+    socket.once('connect', () => finish(true));
+    socket.once('timeout', () => finish(false));
+    socket.once('error', () => finish(false));
+  });
 }
 
 async function waitForUrl(url, timeoutMs) {
