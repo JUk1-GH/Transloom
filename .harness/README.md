@@ -13,6 +13,7 @@ This directory is a repo-local control plane for long-running Claude development
 
 - `.harness/bin/control-plane.mjs` — CLI for bootstrap, queue leasing, dispatch, and status.
 - `.harness/bin/supervisor-loop.mjs` — long-running supervisor that keeps dispatching Claude across role queues.
+- `.harness/bin/product-loop.mjs` — autonomous product-iteration loop that uses the real app surface, chooses the next improvement itself, fixes it, retests it, and repeats.
 - `.harness/config/policies.json` — tracked scheduler, role, retry, and validation policy.
 - `.harness/prompts/*.md` — role-specific prompt preambles used to build prompt packs.
 - `.harness/state/tasks.json` — mutable queue state generated from `feature_list.json`.
@@ -74,6 +75,8 @@ Run the long-lived heavy supervisor loop:
 npm run harness:watch
 npm run harness:drain
 npm run harness:autopilot
+npm run harness:product-loop
+npm run harness:ft-autopilot
 npm run harness:settle
 npm run harness:supervise-loop -- --roles implementer,verifier,reviewer --owner claude-local --max-rounds 3
 ```
@@ -91,12 +94,32 @@ npm run harness -- fail --task FT-001 --role implementer --owner claude-local --
 - `supervisor-loop.mjs` is additive. It does not replace the existing control-plane commands.
 - The loop defaults to `reviewer,verifier,implementer` priority so already-in-flight work drains before new implementation starts.
 - Each round leases the first available task for the highest-priority role, prepares a prompt pack, appends a `result.json` handoff contract, runs Claude, and records `run.started` / `run.finished` or `run.errored` ledger entries.
+- Heavy unattended runs now stream into `.harness/runs/<runId>/session.log` while Claude is still alive, and each run also captures Claude CLI diagnostics in `.harness/runs/<runId>/claude.debug.log`.
+- The supervisor now runs Claude in a tighter unattended profile by default: `--setting-sources local`, `--strict-mcp-config`, `--disable-slash-commands`, `--no-session-persistence`, and `--output-format stream-json`.
 - If Claude exits non-zero, the supervisor immediately calls `fail` for the leased task so the queue does not sit on an expired lease.
 - If Claude exits zero and the child agent wrote a valid `result.json`, the supervisor auto-applies `complete` or `fail` based on that handoff.
 - If Claude exits zero but the handoff file is missing or invalid, the supervisor treats that as a failed unattended run and automatically requeues or blocks the task.
+- The loop now heartbeats active leases while the child is running and will kill/auto-fail runs that exceed `--idle-timeout-ms` or `--max-runtime-ms` instead of silently hanging forever.
 - In unattended mode, manual gates are treated as best-effort evidence: the verifier and reviewer must call out anything they could not observe directly, but the loop still decides `complete` or `fail` without waiting for a human.
 - `harness:watch` keeps polling forever; `harness:drain` exits as soon as nothing can be leased.
-- `harness:autopilot` and `harness:settle` are friendlier aliases for the same fully chained loop.
+- `harness:ft-autopilot` and `harness:settle` are the task-queue aliases for the fully chained role loop.
+
+## Product Autopilot Behavior
+
+- `product-loop.mjs` is the open-ended product iteration path. It is not driven by one FT ticket.
+- `product-loop-launcher.mjs` starts that loop as a detached background daemon so it can survive the launching shell.
+- It boots or reuses a live web surface, prompts Claude to use the actual product, find rough edges, fix the highest-value issue, re-test the flow, and then continue to the next small win.
+- Each round writes a durable prompt pack, `session.log`, `claude.debug.log`, and `result.json` under `.harness/product-runs/<run-id>/`.
+- Before every round it also rebuilds `.harness/state/product-memory.json` from historical `result.json` handoffs so the next prompt is driven by long-term memory instead of only the latest summary.
+- The loop keeps going until Claude explicitly sets `continueAutopilot` to `false`, too many recoverable round failures accumulate, or you stop the process.
+- The watchdog now detects stalled local Bash background tasks (for example, `TaskOutput` timing out while the task is still `running`), kills Claude's whole process group early, and lets the outer loop retry the next round instead of staying dead after one hung child.
+- The prompt now carries forward open threads, recent wins, and a recent-file cooldown list so unfinished work gets continued while already-good areas are less likely to be churned again.
+- If a round re-touches a file from the cooldown list, its `result.json` must include `revisitJustification` or the handoff is rejected as invalid.
+- `harness:autopilot` now launches the product-iteration loop in detached background mode.
+- `harness:autopilot:status` reports whether the detached loop is still alive.
+- `harness:autopilot:stop` sends `SIGTERM` to the detached loop.
+- `harness:product-loop` still runs the same loop in the foreground for debugging.
+- The old FT queue autopilot is still available as `harness:ft-autopilot`.
 
 ## Operational Rules
 
