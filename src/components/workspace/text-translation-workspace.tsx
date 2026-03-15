@@ -551,11 +551,13 @@ export function TextTranslationWorkspace({
 
       <section className='flex min-h-0 flex-1 flex-col'>
         <div className='mb-5 flex flex-wrap items-center justify-between gap-4'>
-          <div>
+          <div className='shrink-0'>
             <h1 className='text-[24px] font-semibold tracking-[-0.03em] text-[#262626]'>主翻译区</h1>
           </div>
 
-          <div className='flex items-center gap-1 rounded-[10px] border border-[#d6d8dd] bg-[#f5f5f6] p-1 shadow-[0_1px_2px_rgba(0,0,0,0.04)]'>
+          {hero ? <div className='min-w-[280px] flex-1'>{hero}</div> : <div className='hidden flex-1 md:block' />}
+
+          <div className='shrink-0 flex items-center gap-1 rounded-[10px] border border-[#d6d8dd] bg-[#f5f5f6] p-1 shadow-[0_1px_2px_rgba(0,0,0,0.04)]'>
             <button
               type='button'
               onClick={() => setActiveTab('text')}

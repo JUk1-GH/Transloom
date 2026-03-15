@@ -6,6 +6,11 @@ import { desktopClient } from '@/lib/ipc/desktop-client';
 
 export type DesktopCapabilities = {
   desktopAvailable: boolean;
+  appIdentity?: {
+    appName: string;
+    appPath: string;
+    isPackaged: boolean;
+  };
   accessibility: {
     granted: boolean;
     status: 'granted' | 'not-granted';

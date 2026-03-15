@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
 import type { OverlayDocument } from '@/domain/capture/types';
-import { PermissionOnboarding, type DesktopCapabilities } from '@/components/desktop/permission-onboarding';
+import type { DesktopCapabilities } from '@/components/desktop/permission-onboarding';
 import { Button } from '@/components/ui/button';
 import { desktopClient } from '@/lib/ipc/desktop-client';
 import {
@@ -145,17 +145,9 @@ function getCaptureOcrWarning(runtime: RuntimeSnapshot | null, desktopAvailable:
 
 export function CaptureTranslationWorkspace({
   capabilities,
-  refreshing,
-  onRefreshCapabilitiesAction,
-  onOpenAccessibilitySettingsAction,
-  onOpenScreenRecordingSettingsAction,
   compact = false,
 }: {
   capabilities?: DesktopCapabilities | null;
-  refreshing?: boolean;
-  onRefreshCapabilitiesAction?: () => void;
-  onOpenAccessibilitySettingsAction?: () => void;
-  onOpenScreenRecordingSettingsAction?: () => void;
   compact?: boolean;
 }) {
   const [runtime, setRuntime] = useState<RuntimeSnapshot | null>(null);
@@ -379,7 +371,6 @@ export function CaptureTranslationWorkspace({
   const surfaceLabel = getSurfaceLabel(desktopAvailable);
   const resultModeLabel = overlay?.mode === 'real' ? '真实模式' : overlay?.mode === 'mock' ? (desktopAvailable ? 'Mock 回退' : '浏览器示例') : null;
   const captureOcrWarning = getCaptureOcrWarning(runtime, desktopAvailable, ocrEngine);
-  const showPermissionOnboarding = Boolean(capabilities && (!capabilities.accessibility.granted || !capabilities.screenRecording?.granted));
   const latestCaptureName = latestCapturePath ? latestCapturePath.split(/[/\\]/).pop() ?? latestCapturePath : null;
   const sourceStateLabel = overlay
     ? latestCapturePath
@@ -532,15 +523,6 @@ export function CaptureTranslationWorkspace({
           </div>
         </section>
 
-        {showPermissionOnboarding ? (
-          <PermissionOnboarding
-            capabilities={capabilities ?? null}
-            refreshing={refreshing}
-            onRefreshAction={onRefreshCapabilitiesAction}
-            onOpenAccessibilitySettingsAction={onOpenAccessibilitySettingsAction}
-            onOpenScreenRecordingSettingsAction={onOpenScreenRecordingSettingsAction}
-          />
-        ) : null}
       </div>
 
       <section className='overflow-hidden rounded-[14px] border border-[#d2d2d2] bg-[#f6f6f6]'>

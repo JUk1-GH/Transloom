@@ -1,5 +1,4 @@
 import { AppShell } from '@/components/ui/app-shell';
-import { AccountPermissionsCard } from '@/components/account/account-permissions-card';
 import { getPersistenceUser } from '@/lib/db';
 import { getDefaultProvider } from '@/server/providers/provider-config-service';
 import { getUsageSummary } from '@/server/usage/service';
@@ -189,9 +188,6 @@ export default async function AccountPage() {
             </div>
           </section>
 
-          <div className='lg:col-span-3'>
-            <AccountPermissionsCard />
-          </div>
         </div>
       </div>
     </AppShell>

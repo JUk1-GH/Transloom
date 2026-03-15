@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import type { PopupTranslationState } from '@/domain/capture/types';
-import { PermissionOnboarding, type DesktopCapabilities } from '@/components/desktop/permission-onboarding';
+import type { DesktopCapabilities } from '@/components/desktop/permission-onboarding';
 import { Button } from '@/components/ui/button';
 import { desktopClient } from '@/lib/ipc/desktop-client';
 
@@ -100,21 +100,6 @@ export default function PopupPage() {
           </div>
         </section>
 
-        {!capabilities?.accessibility.granted ? (
-          <PermissionOnboarding
-            capabilities={capabilities}
-            onRefreshAction={() => {
-              void (async () => {
-                const next = await desktopClient.refreshCapabilities();
-                if (next) {
-                  setCapabilities(next);
-                }
-              })();
-            }}
-            onOpenAccessibilitySettingsAction={() => void desktopClient.openAccessibilitySettings()}
-            onOpenScreenRecordingSettingsAction={() => void desktopClient.openScreenRecordingSettings()}
-          />
-        ) : null}
       </div>
     </main>
   );

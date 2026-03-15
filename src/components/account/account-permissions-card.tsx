@@ -194,6 +194,18 @@ export function AccountPermissionsCard() {
         />
       </div>
 
+      {desktopAvailable && capabilities?.appIdentity ? (
+        <div className='mt-4 rounded-[14px] border border-[#e5e8ec] bg-[#fafafa] px-4 py-3 text-[12px] leading-6 text-[#6f7682]'>
+          <div>
+            当前检测对象：{capabilities.appIdentity.isPackaged ? capabilities.appIdentity.appName : 'Electron（开发模式）'}
+          </div>
+          <div className='break-all text-[#8a909a]'>{capabilities.appIdentity.appPath}</div>
+          <div className='mt-1 text-[#8a909a]'>
+            如果你在 macOS 里授权的是另一份副本、旧版本，或者不是这一路径下的应用，这里仍然会显示未授权。
+          </div>
+        </div>
+      ) : null}
+
       {!desktopAvailable ? (
         <div className='mt-4 rounded-[14px] border border-[#e5e8ec] bg-[#fafafa] px-4 py-3 text-[13px] leading-6 text-[#69717d]'>
           请以桌面应用方式打开 Transloom，这样才能检查权限状态并跳转到 macOS 系统设置。

@@ -212,6 +212,11 @@ function getDesktopCapabilities() {
 
   return {
     desktopAvailable: true,
+    appIdentity: {
+      appName: app.getName(),
+      appPath: app.getPath('exe'),
+      isPackaged: app.isPackaged,
+    },
     accessibility,
     screenRecording,
     selectedTextTrigger: {

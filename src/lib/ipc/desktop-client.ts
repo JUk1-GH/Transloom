@@ -76,6 +76,11 @@ declare global {
       getProviderSecret: () => Promise<DesktopProviderSecret>;
       getCapabilities: () => Promise<{
         desktopAvailable: boolean;
+        appIdentity?: {
+          appName: string;
+          appPath: string;
+          isPackaged: boolean;
+        };
         accessibility: {
           granted: boolean;
           status: 'granted' | 'not-granted';
@@ -95,6 +100,11 @@ declare global {
       }>;
       refreshCapabilities: () => Promise<{
         desktopAvailable: boolean;
+        appIdentity?: {
+          appName: string;
+          appPath: string;
+          isPackaged: boolean;
+        };
         accessibility: {
           granted: boolean;
           status: 'granted' | 'not-granted';

@@ -1,9 +1,10 @@
 'use client';
 
-import type { ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import clsx from 'clsx';
+import { desktopClient } from '@/lib/ipc/desktop-client';
 
 type NavIconProps = {
   active?: boolean;
@@ -58,6 +59,15 @@ function SettingsIcon({ active = false }: NavIconProps) {
   );
 }
 
+function PermissionIcon({ active = false }: NavIconProps) {
+  return (
+    <svg width='16' height='16' viewBox='0 0 16 16' fill='none' aria-hidden='true'>
+      <path d='M8 2.3L12 3.8V7.65C12 10.15 10.47 12.33 8 13.6C5.53 12.33 4 10.15 4 7.65V3.8L8 2.3Z' stroke='currentColor' strokeWidth={active ? '1.8' : '1.5'} strokeLinejoin='round' />
+      <path d='M6.25 7.95L7.35 9.05L9.9 6.45' stroke='currentColor' strokeWidth={active ? '1.8' : '1.5'} strokeLinecap='round' strokeLinejoin='round' />
+    </svg>
+  );
+}
+
 function AccountIcon({ active = false }: NavIconProps) {
   return (
     <svg width='16' height='16' viewBox='0 0 16 16' fill='none' aria-hidden='true'>
@@ -72,6 +82,7 @@ const navItems = [
   { label: '术语表', href: '/glossary', match: ['/glossary'], icon: GlossaryIcon },
   { label: '历史记录', href: '/history', match: ['/history'], icon: HistoryIcon },
   { label: '设置', href: '/settings', match: ['/settings'], icon: SettingsIcon },
+  { label: '权限', href: '/permissions', match: ['/permissions'], icon: PermissionIcon },
 ] as const;
 
 const utilityItems = [
@@ -94,21 +105,107 @@ export function AppShell({
   contentClassName?: string;
 }) {
   const pathname = usePathname();
+  const [headerStatus, setHeaderStatus] = useState<{
+    label: string;
+    tone: 'success' | 'warning' | 'neutral';
+    detail: string;
+  }>({
+    label: '正常运行',
+    tone: 'success',
+    detail: '当前桌面运行状态正常。',
+  });
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function syncHeaderStatus() {
+      if (!desktopClient.isAvailable()) {
+        if (!cancelled) {
+          setHeaderStatus({
+            label: '浏览器预览',
+            tone: 'neutral',
+            detail: '当前是浏览器预览环境，系统权限检测只在 Electron 桌面端可用。',
+          });
+        }
+        return;
+      }
+
+      const capabilitiesRequest = desktopClient.getCapabilities();
+      const capabilities = capabilitiesRequest ? await capabilitiesRequest.catch(() => null) : null;
+      if (cancelled || !capabilities) {
+        return;
+      }
+
+      const missingAccessibility = !capabilities.accessibility.granted;
+      const missingScreenRecording = !capabilities.screenRecording?.granted;
+
+      if (missingAccessibility || missingScreenRecording) {
+        setHeaderStatus({
+          label: '未开启权限',
+          tone: 'warning',
+          detail: '检测到系统权限未开启，部分功能可能不可正常使用。',
+        });
+        return;
+      }
+
+      setHeaderStatus({
+        label: '正常运行',
+        tone: 'success',
+        detail: '当前桌面运行状态正常。',
+      });
+    }
+
+    void syncHeaderStatus();
+    window.addEventListener('focus', syncHeaderStatus);
+
+    return () => {
+      cancelled = true;
+      window.removeEventListener('focus', syncHeaderStatus);
+    };
+  }, [pathname]);
 
   return (
     <div className='h-screen overflow-hidden bg-[#fafafa] text-[#111111]'>
       <div className='flex h-screen w-full flex-col bg-[#fafafa]'>
         <header className='drag-region flex h-10 items-center justify-between border-b border-[#d9d9d9] bg-[rgba(250,250,250,0.82)] px-4 text-[#4c4c4c] backdrop-blur-md'>
-          <div className='flex items-center'>
+          <div className='flex items-center pl-[78px]'>
             <span className='text-[12px] font-medium text-[#666666]'>Transloom</span>
           </div>
 
-          <div className='no-drag flex items-center gap-1.5 text-[12px] font-medium text-[#6a6a6a]'>
+          <div
+            className={clsx(
+              'no-drag flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[12px] font-medium',
+              headerStatus.tone === 'warning'
+                ? 'border-[#efc1bc] bg-[#fff1ef] text-[#be4b44]'
+                : headerStatus.tone === 'neutral'
+                  ? 'border-[#d9d9d9] bg-white text-[#6a6a6a]'
+                  : 'border-[#cae9d5] bg-[#effaf3] text-[#27895b]',
+            )}
+            title={headerStatus.detail}
+          >
             <span className='relative flex h-2 w-2 items-center justify-center'>
-              <span className='absolute inline-flex h-2 w-2 rounded-full bg-[#b8efc6]' />
-              <span className='relative inline-flex h-[6px] w-[6px] rounded-full bg-[#19b86d]' />
+              <span
+                className={clsx(
+                  'absolute inline-flex h-2 w-2 rounded-full',
+                  headerStatus.tone === 'warning'
+                    ? 'bg-[#f4c1bc]'
+                    : headerStatus.tone === 'neutral'
+                      ? 'bg-[#d9d9d9]'
+                      : 'bg-[#b8efc6]',
+                )}
+              />
+              <span
+                className={clsx(
+                  'relative inline-flex h-[6px] w-[6px] rounded-full',
+                  headerStatus.tone === 'warning'
+                    ? 'bg-[#de5b54]'
+                    : headerStatus.tone === 'neutral'
+                      ? 'bg-[#8f8f8f]'
+                      : 'bg-[#19b86d]',
+                )}
+              />
             </span>
-            本地运行中
+            {headerStatus.label}
           </div>
         </header>
 
@@ -122,7 +219,7 @@ export function AppShell({
                 return (
                   <Link
                     key={item.href}
-                    href={item.href}
+                    href={item.href as never}
                     className={clsx(
                       'flex items-center gap-2.5 rounded-[8px] border px-3 py-2 text-[14px] font-medium transition-colors duration-150',
                       active
@@ -175,7 +272,7 @@ export function AppShell({
                   return (
                     <Link
                       key={item.href}
-                      href={item.href}
+                      href={item.href as never}
                       className={clsx(
                         'inline-flex items-center gap-2 whitespace-nowrap rounded-[10px] border px-3 py-1.5 text-sm font-medium transition',
                         active

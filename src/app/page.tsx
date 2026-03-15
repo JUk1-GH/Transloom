@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { OverlayDocument, PopupTranslationState, WorkspaceDraftState } from '@/domain/capture/types';
-import { PermissionOnboarding, type DesktopCapabilities } from '@/components/desktop/permission-onboarding';
+import type { DesktopCapabilities } from '@/components/desktop/permission-onboarding';
 import { AppShell } from '@/components/ui/app-shell';
 import { TextTranslationWorkspace } from '@/components/workspace/text-translation-workspace';
 import { desktopClient } from '@/lib/ipc/desktop-client';
@@ -29,7 +29,6 @@ const mockCaptureOverlay: OverlayDocument = {
 
 export default function Home() {
   const [capabilities, setCapabilities] = useState<DesktopCapabilities | null>(null);
-  const [refreshing, setRefreshing] = useState(false);
   const [workspaceDraft, setWorkspaceDraft] = useState<WorkspaceDraftState | null>(null);
   const [popupState, setPopupState] = useState<PopupTranslationState | null>(null);
   const [latestCapture, setLatestCapture] = useState<{ filePath: string; capturedAt: string } | null>(null);
@@ -37,10 +36,16 @@ export default function Home() {
   const [captureMessage, setCaptureMessage] = useState('截图会直接回到当前工作区。');
   const [captureLoading, setCaptureLoading] = useState(false);
   const workspaceSectionRef = useRef<HTMLDivElement | null>(null);
-  const shouldShowPermissionOnboarding = Boolean(
-    capabilities?.desktopAvailable
-      && (!capabilities.accessibility.granted || !capabilities.screenRecording?.granted),
-  );
+  const missingAccessibility = Boolean(capabilities?.desktopAvailable && !capabilities?.accessibility.granted);
+  const missingScreenRecording = Boolean(capabilities?.desktopAvailable && !capabilities?.screenRecording?.granted);
+  const showPermissionWarning = missingAccessibility || missingScreenRecording;
+  const permissionWarningMessage = missingAccessibility && missingScreenRecording
+    ? '未开启辅助功能和屏幕录制权限，部分功能可能不可正常使用。请前往“权限”页面完成授权。'
+    : missingScreenRecording
+      ? '未开启屏幕录制权限，截图相关功能可能不可正常使用。请前往“权限”页面完成授权。'
+      : missingAccessibility
+        ? '未开启辅助功能权限，划词翻译相关功能可能不可正常使用。请前往“权限”页面完成授权。'
+        : null;
 
   const readCaptureOcrSettings = useCallback(() => {
     if (typeof window === 'undefined') {
@@ -215,18 +220,6 @@ export default function Home() {
     };
   }, [runCaptureTranslation]);
 
-  async function handleRefreshCapabilities() {
-    setRefreshing(true);
-    try {
-      const nextCapabilities = await desktopClient.refreshCapabilities();
-      if (nextCapabilities) {
-        setCapabilities(nextCapabilities);
-      }
-    } finally {
-      setRefreshing(false);
-    }
-  }
-
   function scrollToWorkspace() {
     requestAnimationFrame(() => {
       workspaceSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -260,6 +253,11 @@ export default function Home() {
         <TextTranslationWorkspace
           initialSource=''
           workspaceDraft={workspaceDraft}
+          hero={showPermissionWarning ? (
+            <div className='rounded-[12px] border border-[#f0c1be] bg-[#fff3f1] px-4 py-3 text-[13px] font-medium leading-5 text-[#b84a43] shadow-[0_1px_2px_rgba(184,74,67,0.08)]'>
+              {permissionWarningMessage}
+            </div>
+          ) : null}
           capture={{
             message: captureMessage,
             overlay: captureOverlay,
@@ -278,16 +276,6 @@ export default function Home() {
             desktopAvailable: Boolean(capabilities?.desktopAvailable),
             state: popupState,
           }}
-          sidebarBottom={shouldShowPermissionOnboarding ? (
-            <PermissionOnboarding
-              capabilities={capabilities}
-              refreshing={refreshing}
-              onRefreshAction={() => void handleRefreshCapabilities()}
-              onOpenAccessibilitySettingsAction={() => void desktopClient.openAccessibilitySettings()}
-              onOpenScreenRecordingSettingsAction={() => void desktopClient.openScreenRecordingSettings()}
-              prominent
-            />
-          ) : null}
         />
       </div>
     </AppShell>
