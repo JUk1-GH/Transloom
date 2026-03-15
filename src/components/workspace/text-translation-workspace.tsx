@@ -3,7 +3,7 @@
 import type { ReactNode } from 'react';
 import { useEffect, useMemo, useState } from 'react';
 import clsx from 'clsx';
-import type { OverlayDocument, WorkspaceDraftState } from '@/domain/capture/types';
+import type { OverlayDocument, PopupTranslationState, WorkspaceDraftState } from '@/domain/capture/types';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { desktopClient } from '@/lib/ipc/desktop-client';
@@ -24,11 +24,14 @@ type RuntimeSnapshot = {
   model: string | null;
   hasApiKey: boolean;
   provider?: {
+    kind: string;
     baseUrl: string;
     model: string;
     hasApiKey: boolean;
     enabled?: boolean;
     label?: string;
+    region?: string;
+    projectId?: string;
   };
 };
 
@@ -38,6 +41,8 @@ type ProviderOption = {
   kind: string;
   enabled: boolean;
 };
+
+type WorkspaceTab = 'text' | 'screenshot' | 'popup';
 
 async function readResponsePayload(response: Response) {
   const contentType = response.headers.get('content-type') ?? '';
@@ -53,7 +58,7 @@ async function readResponsePayload(response: Response) {
 }
 
 const languageOptions = [
-  { value: '', label: '检测语言' },
+  { value: '', label: '自动检测' },
   { value: 'en', label: '英语' },
   { value: 'zh-CN', label: '简体中文' },
   { value: 'ja', label: '日语' },
@@ -62,30 +67,72 @@ const languageOptions = [
   { value: 'de', label: '德语' },
 ];
 
+const languageLabels = Object.fromEntries(languageOptions.map((option) => [option.value, option.label]));
+
 const fallbackProviders: ProviderOption[] = [
   { id: 'openai-compatible', label: '当前服务', kind: 'openai-compatible', enabled: true },
 ];
 
-const selectClassName = 'h-9 rounded-[10px] border border-[#d1d1d1] bg-white px-3 text-sm text-[#111111] outline-none transition focus:border-[#8cb3f5]';
-
 function getRuntimeModeLabel(isBootstrapping: boolean, runtimeMode?: 'real' | 'mock') {
   if (isBootstrapping) {
-    return runtimeMode === 'real' ? '正在确认真实模式' : '正在确认 Mock 模式';
+    return runtimeMode === 'real' ? '确认真实模式中' : '确认模拟模式中';
   }
 
-  return runtimeMode === 'real' ? '真实模式' : 'Mock 模式';
+  return runtimeMode === 'real' ? '真实模式' : '模拟模式';
 }
 
 function getModelStatusLabel(isBootstrapping: boolean, model?: string | null) {
   if (isBootstrapping) {
-    return '正在读取模型';
+    return '读取模型中';
   }
 
   return model ?? '未配置模型';
 }
 
+function getTrustStateLabel(
+  isBootstrapping: boolean,
+  runtime?: RuntimeSnapshot | null,
+  translationMode?: 'real' | 'mock' | null,
+) {
+  if (isBootstrapping) {
+    return '确认运行时';
+  }
+
+  if (translationMode === 'real') {
+    return '真实结果';
+  }
+
+  if (translationMode === 'mock') {
+    return '模拟回退';
+  }
+
+  switch (runtime?.status) {
+    case 'provider-missing':
+      return '未启用服务';
+    case 'model-missing':
+      return '缺少模型';
+    case 'api-key-missing':
+      return '缺少凭证';
+    case 'mock-fallback':
+      return '模拟回退';
+    case 'ready':
+      return '真实服务';
+    default:
+      return runtime?.runtimeMode === 'real' ? '真实服务' : '模拟模式';
+  }
+}
+
 function normalizeLanguage(value?: string | null) {
   return (value ?? '').trim().toLowerCase();
+}
+
+function getFileName(path?: string | null) {
+  if (!path) {
+    return null;
+  }
+
+  const segments = path.split(/[\\/]/).filter(Boolean);
+  return segments.at(-1) ?? path;
 }
 
 function pickGlossaryForLanguages(options: GlossarySummary[], sourceLang: string, targetLang: string) {
@@ -109,6 +156,7 @@ export function TextTranslationWorkspace({
   initialSource = '',
   workspaceDraft,
   capture,
+  popup,
 }: {
   hero?: ReactNode;
   sidebarBottom?: ReactNode;
@@ -120,10 +168,13 @@ export function TextTranslationWorkspace({
     isLoading: boolean;
     latestCapturePath: string | null;
     onOpenCapture: () => void;
-    onRetranslateLatest: () => void;
-    onPreviewMockOverlay?: () => void;
     actionDisabledReason?: string | null;
     desktopAvailable: boolean;
+  };
+  popup?: {
+    onOpen: () => void;
+    desktopAvailable: boolean;
+    state?: PopupTranslationState | null;
   };
 }) {
   const [runtime, setRuntime] = useState<RuntimeSnapshot | null>(null);
@@ -141,6 +192,13 @@ export function TextTranslationWorkspace({
   const [isBootstrapping, setIsBootstrapping] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [charactersBilled, setCharactersBilled] = useState<number | null>(null);
+  const [activeTab, setActiveTab] = useState<WorkspaceTab>(
+    workspaceDraft?.sourceType === 'capture'
+      ? 'screenshot'
+      : workspaceDraft?.sourceType === 'popup'
+        ? 'popup'
+        : 'text',
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -258,37 +316,39 @@ export function TextTranslationWorkspace({
     });
   }, [glossaryOptions, sourceLang, targetLang]);
   const activeGlossary = glossaryOptions.find((option) => option.id === selectedGlossaryId) ?? null;
-  const glossaryBadge = !glossaryOptions.length
-    ? '暂无术语表'
-    : activeGlossary
-      ? `术语表：${activeGlossary.name}`
-      : availableGlossaries.length
-        ? '术语表：未启用'
-        : '术语表：当前语言无匹配';
+  const glossaryBadge = isBootstrapping
+    ? '术语表：读取中'
+    : !glossaryOptions.length
+      ? '暂无术语表'
+      : activeGlossary
+        ? `术语表：${activeGlossary.name}`
+        : availableGlossaries.length
+          ? '术语表：未启用'
+          : '术语表：当前语言无匹配';
   const runtimeBanner = isBootstrapping
     ? {
         title: '正在读取翻译运行时',
-        detail: '马上就能确认当前 provider、模型和 API Key 状态。',
+        detail: '即将确认翻译服务、模型和 API Key 状态。',
       }
     : runtime?.status === 'provider-missing'
       ? {
-          title: '还没有启用 provider',
-          detail: '先在设置里启用一个服务，再决定是否切到真实翻译。',
+          title: '还没有启用翻译服务',
+          detail: '先在设置里启用一个翻译服务，再决定是否切到真实翻译。',
         }
       : runtime?.status === 'model-missing'
         ? {
             title: '当前缺少模型配置',
-            detail: '先补全模型名称，当前只会返回 Mock 结果用于预览链路。',
+            detail: '先补全模型名称，当前只会返回模拟结果用于预览链路。',
           }
         : runtime?.status === 'api-key-missing'
           ? {
-              title: '当前缺少 API Key',
-              detail: '先补齐密钥，当前只会返回 Mock 结果用于预览链路。',
+              title: '当前缺少真实凭证',
+              detail: '先补齐密钥或云端凭证，当前只会返回模拟结果用于预览链路。',
             }
           : runtime?.runtimeMode === 'mock'
             ? {
-                title: '当前是 Mock 模式',
-                detail: '当前 provider 暂时回退到 Mock 结果，适合先确认界面与链路。',
+                title: '当前是模拟模式',
+                detail: '当前服务暂时回退到模拟结果，适合先确认界面与链路。',
               }
             : {
                 title: '翻译引擎已就绪',
@@ -296,6 +356,9 @@ export function TextTranslationWorkspace({
               };
   const runtimeModeLabel = getRuntimeModeLabel(isBootstrapping, runtime?.runtimeMode);
   const modelStatusLabel = getModelStatusLabel(isBootstrapping, runtime?.model);
+  const trustStateLabel = getTrustStateLabel(isBootstrapping, runtime, translationMode);
+  const targetLanguageLabel = languageLabels[targetLang] ?? targetLang;
+  const sourceLanguageLabel = languageLabels[sourceLang] ?? '自动检测';
   const translateDisabledReason = isBootstrapping
     ? '正在读取运行时配置。'
     : isLoading
@@ -333,6 +396,17 @@ export function TextTranslationWorkspace({
       applyWorkspaceDraft(workspaceDraft);
     }
   }, [workspaceDraft]);
+
+  useEffect(() => {
+    if (workspaceDraft?.sourceType === 'capture') {
+      setActiveTab('screenshot');
+      return;
+    }
+
+    if (workspaceDraft?.sourceType === 'popup') {
+      setActiveTab('popup');
+    }
+  }, [workspaceDraft?.sourceType, workspaceDraft?.updatedAt]);
 
   useEffect(() => {
     if (!glossaryOptions.length) {
@@ -384,6 +458,18 @@ export function TextTranslationWorkspace({
 
     try {
       const providerSecret = desktopClient.isAvailable() ? await desktopClient.getProviderSecret() : undefined;
+      const providerConfig = providerSecret && selectedProviderId === providerSecret.kind
+        ? {
+            kind: providerSecret.kind,
+            baseUrl: providerSecret.baseUrl,
+            model: providerSecret.model,
+            apiKey: providerSecret.apiKey ?? undefined,
+            secretId: providerSecret.secretId ?? undefined,
+            secretKey: providerSecret.secretKey ?? undefined,
+            region: providerSecret.region,
+            projectId: providerSecret.projectId,
+          }
+        : undefined;
       const response = await fetch('/api/translate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -393,13 +479,7 @@ export function TextTranslationWorkspace({
           targetLang,
           glossaryId: selectedGlossaryId || undefined,
           providerId: selectedProviderId,
-          providerConfig: selectedProviderId === 'openai-compatible'
-            ? {
-                baseUrl: providerSecret?.baseUrl ?? runtime?.provider?.baseUrl,
-                model: providerSecret?.model ?? runtime?.provider?.model,
-                apiKey: providerSecret?.apiKey ?? undefined,
-              }
-            : undefined,
+          providerConfig,
         }),
       });
 
@@ -423,22 +503,17 @@ export function TextTranslationWorkspace({
   }
 
   const mockStatusDetail = runtime?.status === 'model-missing'
-    ? '当前缺少模型配置，所以本次结果来自 Mock 回退。'
+    ? '当前缺少模型配置，所以本次结果来自模拟回退。'
     : runtime?.status === 'api-key-missing'
-      ? '当前缺少 API Key，所以本次结果来自 Mock 回退。'
+      ? '当前缺少真实凭证，所以本次结果来自模拟回退。'
       : runtime?.status === 'provider-missing'
-        ? '当前还没有启用 provider，所以本次结果来自 Mock 回退。'
-        : '当前 provider 暂时回退到 Mock 结果，适合先确认界面与链路。';
+        ? '当前还没有启用翻译服务，所以本次结果来自模拟回退。'
+        : '当前服务暂时回退到模拟结果，适合先确认界面与链路。';
   const statusMessage = error
     ?? (translationMode === 'mock' ? mockStatusDetail : null)
     ?? warning
     ?? runtimeBanner.detail;
   const statusTone = error ? 'text-[#a45322]' : warning ? 'text-[#8c6b12]' : 'text-[#5a5a5a]';
-  const providerStatus = translationMode === 'mock'
-    ? '本次结果来自 Mock 回退'
-    : translationMode === 'real'
-      ? '本次结果来自真实 provider'
-      : runtimeBanner.title;
   const shouldShowMissingProvider = !isBootstrapping && runtime?.status === 'provider-missing';
   const hasEnabledProvider = Boolean(runtime?.provider?.enabled) || providerOptions.some((item) => item.enabled);
   const providerLabel = shouldShowMissingProvider
@@ -446,161 +521,398 @@ export function TextTranslationWorkspace({
     : hasEnabledProvider
       ? (runtime?.provider?.label?.trim() || selectedProvider.label)
       : '未启用';
+  const latestCaptureLabel = getFileName(capture?.latestCapturePath);
+  const isCaptureWorkspace = workspaceDraft?.sourceType === 'capture';
+  const sourcePlaceholder = isCaptureWorkspace ? 'OCR 识别内容会显示在这里。' : '在这里输入或粘贴要翻译的内容...';
+  const providerMetaLabel = translatedText
+    ? `${providerLabel} · ${translationMode === 'mock' ? '模拟' : modelStatusLabel}`
+    : `${providerLabel} · ${runtimeModeLabel}`;
+  const footerStatusMessage = capture?.actionDisabledReason ?? statusMessage;
+  const footerStatusTone = capture?.actionDisabledReason ? 'text-[#8c6b12]' : statusTone;
+  const translateButtonLabel = isLoading ? '翻译中...' : translatedText ? '重新翻译' : '翻译';
+  const shouldShowFooter = Boolean(error || warning || capture?.actionDisabledReason);
+  const captureSourceText = isCaptureWorkspace ? source : '';
+  const captureTranslatedText = isCaptureWorkspace ? translatedText : '';
+  const captureHasResult = Boolean(captureSourceText || captureTranslatedText || capture?.overlay);
+  const popupPreview = popup?.state ?? null;
+
+  function handleClear() {
+    setSource('');
+    setTranslatedText('');
+    setTranslationMode(null);
+    setError(null);
+    setWarning(null);
+    setCharactersBilled(null);
+  }
 
   return (
     <div className='flex h-full min-h-0 flex-col'>
       {hero ? <div className='pb-2'>{hero}</div> : null}
 
-      <section className='flex min-h-0 flex-1 flex-col overflow-hidden rounded-[16px] border border-[#d2d2d2] bg-[#f6f6f6]'>
-        <div className='flex flex-wrap items-center gap-2 border-b border-[#d9d9d9] bg-[#efefef] px-3 py-2'>
-          <select aria-label='Source language' value={sourceLang} onChange={(event) => setSourceLang(event.target.value)} className={selectClassName}>
-            {languageOptions.map((option) => (
-              <option key={option.label} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
+      <section className='flex min-h-0 flex-1 flex-col'>
+        <div className='mb-5 flex flex-wrap items-center justify-between gap-4'>
+          <div>
+            <h1 className='text-[24px] font-semibold tracking-[-0.03em] text-[#262626]'>主翻译区</h1>
+          </div>
 
-          <Button variant='ghost' className='h-9 rounded-[10px] border border-[#d1d1d1] bg-white px-3 text-[#4d4d4d]' onClick={handleSwapLanguages} disabled={!sourceLang || !targetLang}>
-            ⇄
-          </Button>
+          <div className='flex items-center gap-1 rounded-[10px] border border-[#d6d8dd] bg-[#f5f5f6] p-1 shadow-[0_1px_2px_rgba(0,0,0,0.04)]'>
+            <button
+              type='button'
+              onClick={() => setActiveTab('text')}
+              className={clsx(
+                'inline-flex h-9 items-center gap-2 rounded-[8px] px-3.5 py-2 text-[14px] font-medium transition-all',
+                activeTab === 'text'
+                  ? 'bg-white text-[#222326] shadow-[0_1px_2px_rgba(0,0,0,0.05)]'
+                  : 'text-[#70747c] hover:bg-white hover:text-[#2c2c2e]',
+              )}
+            >
+              <svg width='16' height='16' viewBox='0 0 16 16' fill='none' aria-hidden='true'>
+                <rect x='2.25' y='3' width='11.5' height='3.5' rx='0.9' stroke='currentColor' strokeWidth='1.4' />
+                <rect x='2.25' y='9.5' width='5' height='3.5' rx='0.9' stroke='currentColor' strokeWidth='1.4' />
+                <rect x='8.75' y='9.5' width='5' height='3.5' rx='0.9' stroke='currentColor' strokeWidth='1.4' />
+              </svg>
+              文本
+            </button>
 
-          <select aria-label='Target language' value={targetLang} onChange={(event) => setTargetLang(event.target.value)} className={selectClassName}>
-            {languageOptions.filter((option) => option.value).map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-
-          <div className='ml-auto flex flex-wrap items-center gap-2'>
             {capture ? (
-              <>
-                <span className='hidden max-w-[220px] truncate text-xs text-[#666666] lg:inline'>
-                  {capture.message}
-                </span>
-                {capture.desktopAvailable ? (
-                  <>
-                    <Button
-                      variant='secondary'
-                      size='sm'
-                      onClick={capture.onOpenCapture}
-                      disabled={Boolean(capture.actionDisabledReason)}
-                    >
-                      开始截图
-                    </Button>
-                    <Button variant='secondary' size='sm' onClick={capture.onRetranslateLatest} disabled={!capture.latestCapturePath || capture.isLoading}>
-                      最近截图
-                    </Button>
-                  </>
-                ) : capture.onPreviewMockOverlay ? (
-                  <Button variant='secondary' size='sm' onClick={capture.onPreviewMockOverlay}>预览 Mock</Button>
-                ) : null}
-              </>
-            ) : null}
-            <span className='hidden text-xs text-[#666666] xl:inline'>
-              {providerLabel} · {modelStatusLabel} · {runtimeModeLabel}
-            </span>
-            <select
-              aria-label='Glossary'
-              value={selectedGlossaryId}
-              onChange={(event) => setSelectedGlossaryId(event.target.value)}
-              className={clsx(selectClassName, 'max-w-[180px] text-xs')}
-              disabled={isBootstrapping || availableGlossaries.length === 0}
-            >
-              <option value=''>不使用术语表</option>
-              {availableGlossaries.map((option) => (
-                <option key={option.id} value={option.id}>
-                  {option.name} · {option.entries} 条
-                </option>
-              ))}
-            </select>
-            <Button
-              variant='secondary'
-              size='sm'
-              onClick={() => {
-                setSource('');
-                setTranslatedText('');
-                setTranslationMode(null);
-                setError(null);
-                setWarning(null);
-                setCharactersBilled(null);
-              }}
-            >
-              清空
-            </Button>
-            <Button size='sm' onClick={() => void handleTranslate()} disabled={Boolean(translateDisabledReason)}>
-              {isLoading ? '翻译中...' : '翻译'}
-            </Button>
-          </div>
-        </div>
-
-        <div className='grid min-h-0 flex-1 grid-cols-1 md:grid-cols-[minmax(0,1fr)_1px_minmax(0,1fr)]'>
-          <div className='flex min-h-[240px] min-w-0 flex-col bg-[#f8f8f8]'>
-            <div className='flex items-center justify-between border-b border-[#dddddd] px-4 py-2.5'>
-              <span className='text-sm font-medium text-[#2a2a2a]'>原文</span>
-              <span className='text-xs text-[#7a7a7a]'>{sourceCharacters} 字</span>
-            </div>
-            <div className='flex-1 overflow-auto px-4 py-3'>
-              <Textarea
-                value={source}
-                onChange={(event) => setSource(event.target.value)}
-                className='min-h-full resize-none border-0 bg-transparent px-0 py-0 text-[15px] leading-6 text-[#161616] shadow-none focus:border-0'
-                placeholder='输入或粘贴文本以开始翻译。'
-              />
-            </div>
-          </div>
-
-          <div className='hidden bg-[#d6d6d6] md:block' />
-
-          <div className='flex min-h-[240px] min-w-0 flex-col bg-[#fbfbfb]'>
-            <div className='flex items-center justify-between border-t border-[#dddddd] px-4 py-2.5 md:border-t-0 md:border-b'>
-              <span className='text-sm font-medium text-[#2a2a2a]'>译文</span>
-              <div className='flex items-center gap-2 text-xs text-[#7a7a7a]'>
-                {translationMode ? (
-                  <span
-                    className={clsx(
-                      'rounded-full border px-2 py-1 text-[11px] font-medium',
-                      translationMode === 'mock'
-                        ? 'border-[#e6d9b4] bg-[#fbf6e8] text-[#8c6b12]'
-                        : 'border-[#cfe2d4] bg-[#f0f8f2] text-[#2d6a3d]',
-                    )}
-                  >
-                    {translationMode === 'mock' ? 'Mock 结果' : '真实结果'}
-                  </span>
-                ) : null}
-                <span>{charactersBilled ?? 0} 计费字符</span>
-              </div>
-            </div>
-            <div className='flex-1 overflow-auto px-4 py-3'>
-              <div
+              <button
+                type='button'
+                onClick={() => setActiveTab('screenshot')}
                 className={clsx(
-                  'min-h-full whitespace-pre-wrap break-words rounded-[12px] px-3 py-2 text-[15px] leading-6',
-                  translatedText
-                    ? translationMode === 'mock'
-                      ? 'border border-[#f0e1b7] bg-[#fffaf0] text-[#161616]'
-                      : 'text-[#161616]'
-                    : 'text-[#9c9c9c]',
+                  'inline-flex h-9 items-center gap-2 rounded-[8px] px-3.5 py-2 text-[14px] font-medium transition-all',
+                  activeTab === 'screenshot'
+                    ? 'bg-white text-[#222326] shadow-[0_1px_2px_rgba(0,0,0,0.05)]'
+                    : 'text-[#70747c] hover:bg-white hover:text-[#2c2c2e]',
                 )}
               >
-                {translatedText || '译文会显示在右侧。'}
-              </div>
-            </div>
+                <svg width='16' height='16' viewBox='0 0 16 16' fill='none' aria-hidden='true'>
+                  <path d='M3.1 5.45V3.7C3.1 3.04 3.64 2.5 4.3 2.5H6.05' stroke='currentColor' strokeWidth='1.4' strokeLinecap='round' />
+                  <path d='M9.95 2.5H11.7C12.36 2.5 12.9 3.04 12.9 3.7V5.45' stroke='currentColor' strokeWidth='1.4' strokeLinecap='round' />
+                  <path d='M12.9 10.55V12.3C12.9 12.96 12.36 13.5 11.7 13.5H9.95' stroke='currentColor' strokeWidth='1.4' strokeLinecap='round' />
+                  <path d='M6.05 13.5H4.3C3.64 13.5 3.1 12.96 3.1 12.3V10.55' stroke='currentColor' strokeWidth='1.4' strokeLinecap='round' />
+                </svg>
+                {capture.isLoading ? '截图处理中...' : '截图'}
+              </button>
+            ) : null}
+
+            {popup ? (
+              <button
+                type='button'
+                onClick={() => setActiveTab('popup')}
+                className={clsx(
+                  'inline-flex h-9 items-center gap-2 rounded-[8px] px-3.5 py-2 text-[14px] font-medium transition-all',
+                  activeTab === 'popup'
+                    ? 'bg-white text-[#222326] shadow-[0_1px_2px_rgba(0,0,0,0.05)]'
+                    : 'text-[#70747c] hover:bg-white hover:text-[#2c2c2e]',
+                )}
+              >
+                <svg width='16' height='16' viewBox='0 0 16 16' fill='none' aria-hidden='true'>
+                  <path d='M5.15 3.15V5.25' stroke='currentColor' strokeWidth='1.4' strokeLinecap='round' />
+                  <path d='M10.85 10.75V12.85' stroke='currentColor' strokeWidth='1.4' strokeLinecap='round' />
+                  <path d='M3.15 5.15H5.25' stroke='currentColor' strokeWidth='1.4' strokeLinecap='round' />
+                  <path d='M10.75 10.85H12.85' stroke='currentColor' strokeWidth='1.4' strokeLinecap='round' />
+                  <path d='M10.75 5.15H12.85' stroke='currentColor' strokeWidth='1.4' strokeLinecap='round' />
+                  <path d='M3.15 10.85H5.25' stroke='currentColor' strokeWidth='1.4' strokeLinecap='round' />
+                  <path d='M5.15 10.75V12.85' stroke='currentColor' strokeWidth='1.4' strokeLinecap='round' />
+                  <path d='M10.85 3.15V5.25' stroke='currentColor' strokeWidth='1.4' strokeLinecap='round' />
+                </svg>
+                快捷弹窗
+              </button>
+            ) : null}
           </div>
         </div>
 
-        <div className='flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5 border-t border-[#d9d9d9] bg-[#efefef] px-3 py-2 text-xs text-[#666666]'>
-          <div className='flex flex-wrap gap-x-3 gap-y-1.5'>
-            <span>{providerStatus}</span>
-            <span>Provider：{providerLabel}</span>
-            <span>模式：{runtimeModeLabel}</span>
-            <span>目标语言：{languageOptions.find((option) => option.value === targetLang)?.label ?? targetLang}</span>
-            <span>{glossaryBadge}</span>
+        {activeTab === 'text' ? (
+          <>
+            <div className='mb-4 flex items-center justify-between gap-3 overflow-x-auto rounded-[10px] border border-[#d9dbe1] bg-[#fafafa] px-4 py-2.5 shadow-[0_1px_2px_rgba(0,0,0,0.03)]'>
+              <div className='flex shrink-0 items-center gap-1.5'>
+                <select
+                  aria-label='源语言'
+                  value={sourceLang}
+                  onChange={(event) => setSourceLang(event.target.value)}
+                  className='h-8 w-[94px] rounded-[8px] border border-transparent bg-transparent px-2.5 text-[15px] font-medium text-[#2f3541] outline-none transition hover:bg-[#f0f2f5] focus:border-[#dde2e8] focus:bg-white'
+                >
+                  {languageOptions.map((option) => (
+                    <option key={option.label} value={option.value}>
+                      {option.value ? option.label : '自动检测'}
+                    </option>
+                  ))}
+                </select>
+
+                <button
+                  type='button'
+                  onClick={handleSwapLanguages}
+                  disabled={!sourceLang || !targetLang}
+                  className='inline-flex h-8 w-8 items-center justify-center rounded-[8px] text-[#727782] transition hover:bg-[#f0f2f5] hover:text-[#2f3541] disabled:cursor-not-allowed disabled:opacity-45'
+                >
+                  <svg width='16' height='16' viewBox='0 0 16 16' fill='none' aria-hidden='true'>
+                    <path d='M4 5.2H11.7' stroke='currentColor' strokeWidth='1.5' strokeLinecap='round' />
+                    <path d='M9.5 3L11.9 5.2L9.5 7.4' stroke='currentColor' strokeWidth='1.5' strokeLinecap='round' strokeLinejoin='round' />
+                    <path d='M12 10.8H4.3' stroke='currentColor' strokeWidth='1.5' strokeLinecap='round' />
+                    <path d='M6.5 13L4.1 10.8L6.5 8.6' stroke='currentColor' strokeWidth='1.5' strokeLinecap='round' strokeLinejoin='round' />
+                  </svg>
+                </button>
+
+                <select
+                  aria-label='目标语言'
+                  value={targetLang}
+                  onChange={(event) => setTargetLang(event.target.value)}
+                  className='h-8 w-[124px] rounded-[8px] border border-transparent bg-transparent px-2.5 text-[15px] font-medium text-[#2f3541] outline-none transition hover:bg-[#f0f2f5] focus:border-[#dde2e8] focus:bg-white'
+                >
+                  {languageOptions.filter((option) => option.value).map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className='flex shrink-0 items-center gap-3.5 text-[14px] text-[#727782]'>
+                <div className='flex items-center gap-2.5'>
+                  <span className='text-[13px] text-[#7c8189]'>术语表：</span>
+                  <select
+                    aria-label='术语表'
+                    value={selectedGlossaryId}
+                    onChange={(event) => setSelectedGlossaryId(event.target.value)}
+                    className='h-8 w-[112px] rounded-[8px] border border-transparent bg-transparent px-2 text-[14px] text-[#39414d] outline-none transition hover:bg-[#f0f2f5] focus:border-[#dde2e8] focus:bg-white'
+                    disabled={isBootstrapping || glossaryOptions.length === 0}
+                  >
+                    <option value=''>
+                      不使用
+                    </option>
+                    {availableGlossaries.map((option) => (
+                      <option key={option.id} value={option.id}>
+                        {option.name} · {option.entries} 条
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className='h-4 w-px bg-[#d7d7d7]' />
+
+                <button
+                  type='button'
+                  onClick={handleClear}
+                  className='inline-flex items-center gap-1.5 text-[13px] font-medium text-[#7a7f87] transition hover:text-[#2f3541]'
+                >
+                  <svg width='14' height='14' viewBox='0 0 14 14' fill='none' aria-hidden='true'>
+                    <path d='M3.5 3.5L10.5 10.5' stroke='currentColor' strokeWidth='1.4' strokeLinecap='round' />
+                    <path d='M10.5 3.5L3.5 10.5' stroke='currentColor' strokeWidth='1.4' strokeLinecap='round' />
+                  </svg>
+                  清空
+                </button>
+              </div>
+            </div>
+
+            <div className='grid min-h-0 flex-1 gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]'>
+              <div className='relative min-h-[440px] overflow-hidden rounded-[14px] border border-[#d8dbe1] bg-white shadow-[0_1px_2px_rgba(0,0,0,0.04)] transition-all focus-within:ring-2 focus-within:ring-[#22c55e]/20'>
+                <Textarea
+                  value={source}
+                  onChange={(event) => setSource(event.target.value)}
+                  className='h-full min-h-[440px] resize-none border-0 bg-transparent p-5 pb-20 text-[15px] leading-relaxed text-[#2b2f36] shadow-none focus:border-0 focus-visible:ring-0'
+                  placeholder={sourcePlaceholder}
+                  spellCheck={false}
+                />
+
+                <div className='pointer-events-none absolute bottom-4 left-4 flex flex-wrap items-center gap-3 text-[12px] text-[#a0a5ae]'>
+                  <span>{sourceCharacters} 字符</span>
+                </div>
+
+                {source.trim() ? (
+                  <Button
+                    size='sm'
+                    onClick={() => void handleTranslate()}
+                    disabled={Boolean(translateDisabledReason)}
+                    className='absolute bottom-4 right-4 rounded-[8px] border-[#1c1d20] bg-[#242529] px-4 text-[14px] text-white hover:border-[#191a1d] hover:bg-[#191a1d]'
+                  >
+                    {translateButtonLabel}
+                  </Button>
+                ) : null}
+              </div>
+
+              <div className='relative min-h-[440px] overflow-hidden rounded-[14px] border border-[#d8dbe1] bg-[#fafafa] shadow-[0_1px_2px_rgba(0,0,0,0.04)]'>
+                <div className='h-full overflow-auto p-5 pb-20 text-[15px] leading-relaxed'>
+                  {isLoading ? (
+                    <div className='flex items-center gap-2 text-[#8f95a0]'>
+                      <span className='h-2 w-2 rounded-full bg-[#8f95a0]' />
+                      <span>{isCaptureWorkspace ? '正在处理截图结果...' : '正在翻译...'}</span>
+                    </div>
+                  ) : translatedText ? (
+                    <div className='whitespace-pre-wrap break-words text-[#2b2f36]'>{translatedText}</div>
+                  ) : (
+                    <p className='italic text-[#b0b5bd]'>翻译结果会显示在这里...</p>
+                  )}
+                </div>
+
+                {translatedText || isLoading ? (
+                  <div className='pointer-events-none absolute bottom-4 left-4 flex flex-wrap items-center gap-2 text-[12px] text-[#9aa0aa]'>
+                    <span>{providerMetaLabel}</span>
+                    {translationMode === 'real' ? <span className='text-[#1b8d53]'>• 真实</span> : null}
+                    {translationMode === 'mock' ? <span className='text-[#b07d12]'>• 模拟</span> : null}
+                  </div>
+                ) : null}
+
+                {charactersBilled !== null && translatedText ? (
+                  <div className='absolute bottom-4 right-4 rounded-full border border-[#dce1e8] bg-white px-2.5 py-1 text-[11px] text-[#737984]'>
+                    {charactersBilled} 字符
+                  </div>
+                ) : null}
+              </div>
+            </div>
+
+            {shouldShowFooter ? (
+              <div className='mt-4 flex flex-wrap items-center justify-between gap-3 rounded-[14px] border border-[#e1e4e8] bg-[#fafafa] px-4 py-2.5 text-[12px]'>
+                <div className={clsx('leading-5', footerStatusTone)}>
+                  {footerStatusMessage}
+                </div>
+                <div className='flex flex-wrap items-center gap-2 text-[#7a7f87]'>
+                  <span>{sourceLanguageLabel} → {targetLanguageLabel}</span>
+                  <span>•</span>
+                  <span>{glossaryBadge}</span>
+                  <span>•</span>
+                  <span>{trustStateLabel}</span>
+                </div>
+              </div>
+            ) : null}
+          </>
+        ) : null}
+
+        {activeTab === 'screenshot' && capture ? (
+          <>
+            <div className='mb-4 flex flex-wrap items-center justify-between gap-3 rounded-[12px] border border-[#d9dbe1] bg-[#fafafa] px-4 py-3 shadow-[0_1px_2px_rgba(0,0,0,0.03)]'>
+              <div>
+                <div className='text-[15px] font-medium text-[#2f3541]'>截图翻译</div>
+                <div className='mt-1 text-[13px] text-[#7c8189]'>截取一个区域后，识别内容和翻译结果都会留在同一个工作区里。</div>
+              </div>
+
+              <div className='flex flex-wrap items-center gap-2'>
+                {latestCaptureLabel ? (
+                  <span className='rounded-full border border-[#dde2e8] bg-white px-3 py-1 text-[12px] text-[#6f7682]'>
+                    {latestCaptureLabel}
+                  </span>
+                ) : null}
+                <Button
+                  size='sm'
+                  onClick={() => capture.onOpenCapture()}
+                  disabled={Boolean(capture.actionDisabledReason) || capture.isLoading}
+                  className='rounded-[10px] border-[#242529] bg-[#242529] px-4 text-white hover:border-[#191a1d] hover:bg-[#191a1d]'
+                >
+                  {capture.isLoading ? '处理中...' : '开始截图'}
+                </Button>
+              </div>
+            </div>
+
+            <div className='grid min-h-0 flex-1 gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]'>
+              <section className='min-h-[440px] overflow-hidden rounded-[14px] border border-[#d8dbe1] bg-white shadow-[0_1px_2px_rgba(0,0,0,0.04)]'>
+                <div className='border-b border-[#eceef2] px-5 py-4'>
+                  <div className='text-[15px] font-medium text-[#262a31]'>识别内容</div>
+                  <div className='mt-1 text-[13px] text-[#7a818c]'>
+                    {captureHasResult ? '这里显示最近一张截图识别出的 OCR 文本。' : '还没有处理过截图。'}
+                  </div>
+                </div>
+                <div className='h-[calc(100%-80px)] overflow-auto p-5'>
+                  {captureHasResult ? (
+                    <div className='whitespace-pre-wrap break-words rounded-[12px] bg-[#fafafa] p-4 text-[15px] leading-relaxed text-[#2b2f36]'>
+                      {captureSourceText || '这张截图没有返回可识别文本。'}
+                    </div>
+                  ) : (
+                    <div className='flex h-full items-center justify-center rounded-[12px] border border-dashed border-[#d8dbe1] bg-[#fafafa] px-6 text-center text-[14px] text-[#8a909a]'>
+                      先截取一个区域，识别内容会显示在这里。
+                    </div>
+                  )}
+                </div>
+              </section>
+
+              <section className='min-h-[440px] overflow-hidden rounded-[14px] border border-[#d8dbe1] bg-[#fafafa] shadow-[0_1px_2px_rgba(0,0,0,0.04)]'>
+                <div className='border-b border-[#eceef2] bg-white px-5 py-4'>
+                  <div className='text-[15px] font-medium text-[#262a31]'>翻译结果</div>
+                  <div className='mt-1 text-[13px] text-[#7a818c]'>
+                    {captureHasResult ? '翻译内容会和 OCR 结果并排显示。' : '截图处理完成后，这里会显示翻译结果。'}
+                  </div>
+                </div>
+                <div className='h-[calc(100%-80px)] overflow-auto p-5'>
+                  {captureHasResult ? (
+                    <div className='whitespace-pre-wrap break-words rounded-[12px] bg-white p-4 text-[15px] leading-relaxed text-[#2b2f36]'>
+                      {captureTranslatedText || '这张截图没有返回翻译文本。'}
+                    </div>
+                  ) : (
+                    <div className='flex h-full items-center justify-center rounded-[12px] border border-dashed border-[#d8dbe1] bg-white px-6 text-center text-[14px] text-[#8a909a]'>
+                      OCR 完成后，翻译结果会显示在这里。
+                    </div>
+                  )}
+                </div>
+              </section>
+            </div>
+
+            <div className='mt-4 flex flex-wrap items-center justify-between gap-3 rounded-[14px] border border-[#e1e4e8] bg-[#fafafa] px-4 py-2.5 text-[12px]'>
+              <div className={clsx('leading-5', footerStatusTone)}>
+                {capture.message}
+              </div>
+              <div className='flex flex-wrap items-center gap-2 text-[#7a7f87]'>
+                <span>{targetLanguageLabel}</span>
+                <span>•</span>
+                <span>{providerMetaLabel}</span>
+                {capture?.overlay?.regions?.length ? (
+                  <>
+                    <span>•</span>
+                    <span>{capture.overlay.regions.length} 个区域</span>
+                  </>
+                ) : null}
+              </div>
+            </div>
+          </>
+        ) : null}
+
+        {activeTab === 'popup' && popup ? (
+          <div className='flex min-h-0 flex-1 items-center justify-center rounded-[18px] border border-dashed border-[#d9dbe1] bg-[#fafafa] p-8'>
+            <div className='w-full max-w-[540px] rounded-[22px] border border-[#d9dbe1] bg-white p-4 shadow-[0_12px_32px_rgba(15,23,42,0.08)]'>
+              <div className='mb-4 flex items-center justify-between gap-3'>
+                <div>
+                  <div className='text-[13px] font-semibold tracking-[0.08em] text-[#8a8176]'>快捷弹窗</div>
+                  <div className='mt-1 text-[18px] font-medium tracking-[-0.02em] text-[#252931]'>划词翻译预览</div>
+                </div>
+                <Button variant='secondary' size='sm' onClick={() => popup.onOpen()} disabled={!popup.desktopAvailable} className='rounded-full'>
+                  打开弹窗
+                </Button>
+              </div>
+
+              {popupPreview?.error ? (
+                <div className='mb-3 rounded-[14px] border border-rose-200 bg-rose-50 px-3 py-2.5 text-[13px] text-rose-700'>
+                  {popupPreview.error}
+                </div>
+              ) : null}
+
+              {popupPreview?.warning ? (
+                <div className='mb-3 rounded-[14px] border border-amber-200 bg-amber-50 px-3 py-2.5 text-[13px] text-amber-700'>
+                  {popupPreview.warning}
+                </div>
+              ) : null}
+
+              <div className='grid gap-3'>
+                <div className='rounded-[16px] bg-[#f7f4ef] px-4 py-3'>
+                  <div className='mb-1.5 text-[11px] font-medium tracking-[0.08em] text-[#8a8176]'>原文</div>
+                  <div className='whitespace-pre-wrap text-[14px] leading-6 text-[#5b544c]'>
+                    {popupPreview?.sourceText || '在任意应用中选中文本后，使用全局快捷键打开弹窗。'}
+                  </div>
+                </div>
+
+                <div className='rounded-[16px] bg-[#fcf8ef] px-4 py-3'>
+                  <div className='mb-1.5 flex items-center justify-between gap-3 text-[11px] font-medium tracking-[0.08em] text-[#8a6d2f]'>
+                    <span>译文</span>
+                    <span>{popupPreview?.isLoading ? '处理中' : popupPreview?.targetLang ?? '目标语言'}</span>
+                  </div>
+                  <div className='whitespace-pre-wrap text-[16px] leading-7 text-[#18181b]'>
+                    {popupPreview?.isLoading ? '正在翻译所选文本…' : popupPreview?.translatedText || '翻译结果会显示在这里。'}
+                  </div>
+                </div>
+              </div>
+
+              <div className='mt-4 text-[13px] leading-6 text-[#737a86]'>
+                如果你希望不离开当前应用就翻译选中文本，可以使用这个快捷弹窗。
+              </div>
+            </div>
           </div>
-          <div className={clsx('max-w-full text-right text-[11px]', statusTone)}>
-            {statusMessage}
-          </div>
-        </div>
+        ) : null}
       </section>
 
       {sidebarBottom ? <div className='pt-2'>{sidebarBottom}</div> : null}

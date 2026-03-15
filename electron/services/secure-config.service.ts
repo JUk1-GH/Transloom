@@ -1,15 +1,30 @@
 import { app, safeStorage } from 'electron';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import type { ProviderKind } from '@/domain/translation/provider';
+import {
+  TENCENT_CLOUD_ACTION,
+  TENCENT_CLOUD_DEFAULT_REGION,
+  TENCENT_CLOUD_ENDPOINT,
+  testTencentCloudConnection,
+} from './tencent-cloud.service';
 
 export type RuntimeMode = 'real' | 'mock';
+type SecureProviderKind = Extract<ProviderKind, 'openai-compatible' | 'tencent'>;
+
+interface SecureProviderSettings {
+  kind: SecureProviderKind;
+  baseUrl: string;
+  model: string;
+  apiKey?: string;
+  secretId?: string;
+  secretKey?: string;
+  region: string;
+  projectId: string;
+}
 
 export interface SecureSettingsData {
-  provider: {
-    baseUrl: string;
-    model: string;
-    apiKey?: string;
-  };
+  provider: SecureProviderSettings;
   defaultTargetLang: string;
   shortcut: string;
 }
@@ -22,8 +37,11 @@ type SecureSettingsUpdate = {
 
 const DEFAULT_SETTINGS: SecureSettingsData = {
   provider: {
+    kind: 'openai-compatible',
     baseUrl: 'https://api.openai.com/v1',
     model: 'gpt-4.1-mini',
+    region: TENCENT_CLOUD_DEFAULT_REGION,
+    projectId: '0',
   },
   defaultTargetLang: 'zh-CN',
   shortcut: 'CommandOrControl+Shift+2',
@@ -33,12 +51,44 @@ function getSettingsPath() {
   return path.join(app.getPath('userData'), 'secure-settings.json');
 }
 
+function normalizeProjectId(value?: string | number | null) {
+  if (value === undefined || value === null || String(value).trim() === '') {
+    return '0';
+  }
+
+  const normalizedValue = Number(value);
+  if (!Number.isInteger(normalizedValue) || normalizedValue < 0) {
+    return '0';
+  }
+
+  return String(normalizedValue);
+}
+
+function inferProviderKind(raw?: Partial<SecureProviderSettings>): SecureProviderKind {
+  if (raw?.kind === 'tencent' || raw?.kind === 'openai-compatible') {
+    return raw.kind;
+  }
+
+  if (raw?.secretId?.trim() || raw?.secretKey?.trim()) {
+    return 'tencent';
+  }
+
+  return 'openai-compatible';
+}
+
 function normalizeSettings(raw?: Partial<SecureSettingsData>): SecureSettingsData {
+  const providerKind = inferProviderKind(raw?.provider);
+
   return {
     provider: {
       baseUrl: raw?.provider?.baseUrl?.trim() || DEFAULT_SETTINGS.provider.baseUrl,
       model: raw?.provider?.model?.trim() || DEFAULT_SETTINGS.provider.model,
+      kind: providerKind,
       apiKey: raw?.provider?.apiKey?.trim() || undefined,
+      secretId: raw?.provider?.secretId?.trim() || undefined,
+      secretKey: raw?.provider?.secretKey?.trim() || undefined,
+      region: raw?.provider?.region?.trim() || DEFAULT_SETTINGS.provider.region,
+      projectId: normalizeProjectId(raw?.provider?.projectId),
     },
     defaultTargetLang: raw?.defaultTargetLang?.trim() || DEFAULT_SETTINGS.defaultTargetLang,
     shortcut: raw?.shortcut?.trim() || DEFAULT_SETTINGS.shortcut,
@@ -62,19 +112,40 @@ async function writeStoredSettings(settings: SecureSettingsData) {
   await fs.writeFile(getSettingsPath(), payload);
 }
 
+function getEffectiveProvider(provider: SecureProviderSettings) {
+  return {
+    kind: provider.kind,
+    baseUrl: provider.kind === 'tencent' ? TENCENT_CLOUD_ENDPOINT : provider.baseUrl.trim(),
+    model: provider.kind === 'tencent' ? TENCENT_CLOUD_ACTION : provider.model.trim(),
+    apiKey: provider.apiKey?.trim() || undefined,
+    secretId: provider.secretId?.trim() || undefined,
+    secretKey: provider.secretKey?.trim() || undefined,
+    region: provider.region.trim() || TENCENT_CLOUD_DEFAULT_REGION,
+    projectId: normalizeProjectId(provider.projectId),
+  };
+}
+
 function buildRuntimeSnapshot(settings: SecureSettingsData) {
-  const hasApiKey = Boolean(settings.provider.apiKey?.trim());
-  const hasCompleteProvider = Boolean(settings.provider.baseUrl.trim() && settings.provider.model.trim() && settings.provider.apiKey?.trim());
+  const provider = getEffectiveProvider(settings.provider);
+  const hasCredential = provider.kind === 'tencent'
+    ? Boolean(provider.secretId && provider.secretKey)
+    : Boolean(provider.apiKey);
+  const hasCompleteProvider = provider.kind === 'tencent'
+    ? Boolean(provider.region && provider.secretId && provider.secretKey)
+    : Boolean(provider.baseUrl && provider.model && provider.apiKey);
 
   return {
     runtimeMode: (hasCompleteProvider ? 'real' : 'mock') as RuntimeMode,
-    baseUrl: settings.provider.baseUrl || null,
-    model: settings.provider.model || null,
-    hasApiKey,
+    baseUrl: provider.baseUrl || null,
+    model: provider.model || null,
+    hasApiKey: hasCredential,
     provider: {
-      baseUrl: settings.provider.baseUrl,
-      model: settings.provider.model,
-      hasApiKey,
+      kind: provider.kind,
+      baseUrl: provider.baseUrl,
+      model: provider.model,
+      hasApiKey: hasCredential,
+      region: provider.region,
+      projectId: provider.projectId,
     },
   };
 }
@@ -92,7 +163,9 @@ export function createSecureConfigService() {
         provider: {
           ...current.provider,
           ...input.provider,
+          kind: input.provider?.kind ?? current.provider.kind,
           apiKey: input.provider?.apiKey === undefined ? current.provider.apiKey : input.provider.apiKey?.trim() || undefined,
+          secretKey: input.provider?.secretKey === undefined ? current.provider.secretKey : input.provider.secretKey?.trim() || undefined,
         },
       });
 
@@ -105,15 +178,38 @@ export function createSecureConfigService() {
     },
     async testProviderConnection(input?: Partial<SecureSettingsData['provider']>) {
       const settings = await readStoredSettings();
-      const provider = {
-        ...settings.provider,
-        ...input,
-        baseUrl: input?.baseUrl?.trim() || settings.provider.baseUrl,
-        model: input?.model?.trim() || settings.provider.model,
-        apiKey: input?.apiKey?.trim() || settings.provider.apiKey,
-      };
+      const provider = normalizeSettings({
+        provider: {
+          ...settings.provider,
+          ...input,
+          kind: input?.kind ?? settings.provider.kind,
+          apiKey: input?.apiKey === undefined ? settings.provider.apiKey : input.apiKey?.trim() || undefined,
+          secretKey: input?.secretKey === undefined ? settings.provider.secretKey : input.secretKey?.trim() || undefined,
+        },
+      }).provider;
+      const effectiveProvider = getEffectiveProvider(provider);
 
-      if (!provider.baseUrl?.trim() || !provider.model?.trim() || !provider.apiKey?.trim()) {
+      if (effectiveProvider.kind === 'tencent') {
+        if (!effectiveProvider.secretId || !effectiveProvider.secretKey) {
+          return {
+            ok: false,
+            code: 'CONFIG_INCOMPLETE',
+            message: '请先填写 SecretId、SecretKey 和 Region。',
+            runtimeMode: 'mock' as RuntimeMode,
+          };
+        }
+
+        return testTencentCloudConnection({
+          secretId: effectiveProvider.secretId,
+          secretKey: effectiveProvider.secretKey,
+          region: effectiveProvider.region,
+          projectId: effectiveProvider.projectId,
+        });
+      }
+
+      const openAiCompatibleProvider = effectiveProvider;
+
+      if (!openAiCompatibleProvider.baseUrl?.trim() || !openAiCompatibleProvider.model?.trim() || !openAiCompatibleProvider.apiKey?.trim()) {
         return {
           ok: false,
           code: 'CONFIG_INCOMPLETE',
@@ -123,9 +219,9 @@ export function createSecureConfigService() {
       }
 
       try {
-        const response = await fetch(`${provider.baseUrl.replace(/\/$/, '')}/models`, {
+        const response = await fetch(`${openAiCompatibleProvider.baseUrl.replace(/\/$/, '')}/models`, {
           headers: {
-            Authorization: `Bearer ${provider.apiKey}`,
+            Authorization: `Bearer ${openAiCompatibleProvider.apiKey}`,
           },
         });
 

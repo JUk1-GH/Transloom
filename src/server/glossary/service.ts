@@ -206,6 +206,93 @@ export async function createGlossaryWithEntry(input: {
   };
 }
 
+export async function addGlossaryEntry(input: {
+  glossaryId: string;
+  sourceTerm: string;
+  targetTerm: string;
+}) {
+  const payload = {
+    glossaryId: input.glossaryId.trim(),
+    sourceTerm: input.sourceTerm.trim(),
+    targetTerm: input.targetTerm.trim(),
+  };
+
+  if (!payload.glossaryId || !payload.sourceTerm || !payload.targetTerm) {
+    throw Object.assign(new Error('术语表和术语条目不能为空。'), {
+      code: 'INVALID_GLOSSARY_ENTRY_INPUT',
+      status: 400,
+    });
+  }
+
+  if (!isDatabaseConfigured()) {
+    const glossary = volatileGlossaries.find((item) => item.id === payload.glossaryId);
+    if (!glossary) {
+      throw Object.assign(new Error('找不到要追加规则的术语表。'), {
+        code: 'GLOSSARY_NOT_FOUND',
+        status: 404,
+      });
+    }
+
+    const entryId = `entry-${Date.now()}`;
+    const createdAt = new Date().toISOString();
+    const entry = {
+      id: entryId,
+      glossaryId: glossary.id,
+      glossaryName: glossary.name,
+      sourceLang: glossary.sourceLang,
+      targetLang: glossary.targetLang,
+      sourceTerm: payload.sourceTerm,
+      targetTerm: payload.targetTerm,
+    };
+
+    glossary.items.push(entry);
+    glossary.entries = glossary.items.length;
+    glossary.updatedAt = createdAt;
+
+    return entry;
+  }
+
+  const user = await getPersistenceUser();
+  if (!user) {
+    throw Object.assign(new Error('无法初始化本地术语表存储。'), {
+      code: 'GLOSSARY_STORAGE_UNAVAILABLE',
+      status: 500,
+    });
+  }
+
+  const glossary = await db.glossary.findFirst({
+    where: {
+      id: payload.glossaryId,
+      userId: user.id,
+    },
+  });
+
+  if (!glossary) {
+    throw Object.assign(new Error('找不到要追加规则的术语表。'), {
+      code: 'GLOSSARY_NOT_FOUND',
+      status: 404,
+    });
+  }
+
+  const entry = await db.glossaryEntry.create({
+    data: {
+      glossaryId: glossary.id,
+      sourceTerm: payload.sourceTerm,
+      targetTerm: payload.targetTerm,
+    },
+  });
+
+  return {
+    id: entry.id,
+    glossaryId: glossary.id,
+    glossaryName: glossary.name,
+    sourceLang: glossary.sourceLang,
+    targetLang: glossary.targetLang,
+    sourceTerm: entry.sourceTerm,
+    targetTerm: entry.targetTerm,
+  };
+}
+
 export async function getGlossarySummary() {
   const glossaries = await listGlossarySummaries();
   const entries = glossaries.reduce((total, glossary) => total + glossary.entries, 0);

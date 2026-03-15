@@ -92,6 +92,14 @@ export async function saveProviderConfig(input: ProviderConfig) {
     const nextConfig = { ...input, apiKeyMasked: maskApiKey(input.apiKeyMasked), hasApiKey: input.hasApiKey ?? Boolean(input.apiKeyMasked) };
     const existingIndex = volatileProviderConfigs.findIndex((item) => item.kind === input.kind);
 
+    if (nextConfig.enabled) {
+      for (const item of volatileProviderConfigs) {
+        if (item.id !== nextConfig.id) {
+          item.enabled = false;
+        }
+      }
+    }
+
     if (existingIndex >= 0) {
       volatileProviderConfigs[existingIndex] = nextConfig;
     } else {
@@ -101,29 +109,44 @@ export async function saveProviderConfig(input: ProviderConfig) {
     return nextConfig;
   }
 
-  const record = await db.providerCredentialMeta.upsert({
-    where: {
-      id: input.id,
-    },
-    update: {
-      provider: input.kind,
-      label: input.label,
-      baseUrl: input.baseUrl,
-      model: input.model,
-      isEnabled: input.enabled,
-      hasStoredSecret: input.hasApiKey ?? false,
-      lastValidated: input.hasApiKey ? new Date() : null,
-    },
-    create: {
-      id: input.id,
-      provider: input.kind,
-      label: input.label,
-      baseUrl: input.baseUrl,
-      model: input.model,
-      isEnabled: input.enabled,
-      hasStoredSecret: input.hasApiKey ?? false,
-      lastValidated: input.hasApiKey ? new Date() : null,
-    },
+  const record = await db.$transaction(async (tx) => {
+    if (input.enabled) {
+      await tx.providerCredentialMeta.updateMany({
+        where: {
+          NOT: {
+            id: input.id,
+          },
+        },
+        data: {
+          isEnabled: false,
+        },
+      });
+    }
+
+    return tx.providerCredentialMeta.upsert({
+      where: {
+        id: input.id,
+      },
+      update: {
+        provider: input.kind,
+        label: input.label,
+        baseUrl: input.baseUrl,
+        model: input.model,
+        isEnabled: input.enabled,
+        hasStoredSecret: input.hasApiKey ?? false,
+        lastValidated: input.hasApiKey ? new Date() : null,
+      },
+      create: {
+        id: input.id,
+        provider: input.kind,
+        label: input.label,
+        baseUrl: input.baseUrl,
+        model: input.model,
+        isEnabled: input.enabled,
+        hasStoredSecret: input.hasApiKey ?? false,
+        lastValidated: input.hasApiKey ? new Date() : null,
+      },
+    });
   });
 
   return {

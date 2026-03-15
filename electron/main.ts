@@ -12,6 +12,12 @@ import { createPopupStateService } from './services/popup-state.service';
 import { createRegionCaptureService } from './services/region-capture.service';
 import { createSecureConfigService, type SecureSettingsData, type RuntimeMode } from './services/secure-config.service';
 import { createSelectedTextService } from './services/selected-text.service';
+import {
+  TENCENT_CLOUD_ACTION,
+  TENCENT_CLOUD_DEFAULT_REGION,
+  TENCENT_CLOUD_ENDPOINT,
+  testTencentCloudConnection,
+} from './services/tencent-cloud.service';
 import { createWindowManager } from './services/window-manager.service';
 import { createWorkspaceDraftService } from './services/workspace-draft.service';
 
@@ -20,8 +26,11 @@ const DEV_WEB_PORT = process.env.TRANSLOOM_WEB_PORT ?? '3003';
 const HARNESS_ENABLED = process.env.TRANSLOOM_HARNESS === '1';
 const HARNESS_DEFAULT_SETTINGS: SecureSettingsData = {
   provider: {
+    kind: 'openai-compatible',
     baseUrl: 'https://api.openai.com/v1',
     model: 'gpt-4.1-mini',
+    region: TENCENT_CLOUD_DEFAULT_REGION,
+    projectId: '0',
   },
   defaultTargetLang: 'zh-CN',
   shortcut: 'CommandOrControl+Shift+2',
@@ -68,6 +77,64 @@ function maskApiKey(apiKey?: string) {
   }
 
   return `${apiKey.slice(0, 4)}***${apiKey.slice(-4)}`;
+}
+
+function getEffectiveProvider(provider: SecureSettingsData['provider']) {
+  return {
+    kind: provider.kind,
+    baseUrl: provider.kind === 'tencent' ? TENCENT_CLOUD_ENDPOINT : provider.baseUrl,
+    model: provider.kind === 'tencent' ? TENCENT_CLOUD_ACTION : provider.model,
+    apiKey: provider.apiKey?.trim() || undefined,
+    secretId: provider.secretId?.trim() || undefined,
+    secretKey: provider.secretKey?.trim() || undefined,
+    region: provider.region.trim() || TENCENT_CLOUD_DEFAULT_REGION,
+    projectId: provider.projectId?.trim() || '0',
+  };
+}
+
+function hasProviderCredential(provider: ReturnType<typeof getEffectiveProvider>) {
+  return provider.kind === 'tencent'
+    ? Boolean(provider.secretId && provider.secretKey)
+    : Boolean(provider.apiKey);
+}
+
+function hasCompleteProvider(provider: ReturnType<typeof getEffectiveProvider>) {
+  return provider.kind === 'tencent'
+    ? Boolean(provider.region && provider.secretId && provider.secretKey)
+    : Boolean(provider.baseUrl.trim() && provider.model.trim() && provider.apiKey);
+}
+
+function buildProviderSummary(provider: SecureSettingsData['provider']) {
+  const effectiveProvider = getEffectiveProvider(provider);
+  const hasCredential = hasProviderCredential(effectiveProvider);
+
+  return {
+    kind: effectiveProvider.kind,
+    baseUrl: effectiveProvider.baseUrl,
+    model: effectiveProvider.model,
+    apiKeyMasked: maskApiKey(provider.apiKey),
+    hasApiKey: hasCredential,
+    secretId: provider.secretId ?? '',
+    secretKeyMasked: maskApiKey(provider.secretKey),
+    hasSecretKey: Boolean(provider.secretKey),
+    region: effectiveProvider.region,
+    projectId: effectiveProvider.projectId,
+  };
+}
+
+function buildProviderSecret(provider: SecureSettingsData['provider']) {
+  const effectiveProvider = getEffectiveProvider(provider);
+
+  return {
+    kind: effectiveProvider.kind,
+    baseUrl: effectiveProvider.baseUrl,
+    model: effectiveProvider.model,
+    apiKey: provider.apiKey ?? null,
+    secretId: provider.secretId ?? null,
+    secretKey: provider.secretKey ?? null,
+    region: effectiveProvider.region,
+    projectId: effectiveProvider.projectId,
+  };
 }
 
 async function ensureLocalDatabase() {
@@ -162,12 +229,7 @@ async function getDesktopSettings() {
       desktopMode: true,
       defaultTargetLang: harnessSettings.defaultTargetLang,
       runtimeMode: runtimeSnapshot.runtimeMode,
-      provider: {
-        baseUrl: harnessSettings.provider.baseUrl,
-        model: harnessSettings.provider.model,
-        apiKeyMasked: maskApiKey(harnessSettings.provider.apiKey),
-        hasApiKey: Boolean(harnessSettings.provider.apiKey),
-      },
+      provider: buildProviderSummary(harnessSettings.provider),
     };
   }
 
@@ -180,54 +242,63 @@ async function getDesktopSettings() {
     desktopMode: true,
     defaultTargetLang: settings.defaultTargetLang,
     runtimeMode: runtimeSnapshot.runtimeMode,
-    provider: {
-      baseUrl: settings.provider.baseUrl,
-      model: settings.provider.model,
-      apiKeyMasked: maskApiKey(settings.provider.apiKey),
-      hasApiKey: Boolean(settings.provider.apiKey),
-    },
+    provider: buildProviderSummary(settings.provider),
   };
 }
 
 function getHarnessRuntimeMode() {
-  const hasApiKey = Boolean(harnessSettings.provider.apiKey?.trim());
+  const provider = getEffectiveProvider(harnessSettings.provider);
+  const hasApiKey = hasProviderCredential(provider);
   return {
-    runtimeMode: (hasApiKey ? 'real' : 'mock') as RuntimeMode,
-    baseUrl: harnessSettings.provider.baseUrl || null,
-    model: harnessSettings.provider.model || null,
+    runtimeMode: (hasCompleteProvider(provider) ? 'real' : 'mock') as RuntimeMode,
+    baseUrl: provider.baseUrl || null,
+    model: provider.model || null,
     hasApiKey,
     provider: {
-      baseUrl: harnessSettings.provider.baseUrl,
-      model: harnessSettings.provider.model,
+      kind: provider.kind,
+      baseUrl: provider.baseUrl,
+      model: provider.model,
       hasApiKey,
+      region: provider.region,
+      projectId: provider.projectId,
     },
   };
 }
 
 function getHarnessProviderSecret() {
-  return {
-    baseUrl: harnessSettings.provider.baseUrl,
-    model: harnessSettings.provider.model,
-    apiKey: harnessSettings.provider.apiKey ?? null,
-  };
+  return buildProviderSecret(harnessSettings.provider);
 }
 
 function applyHarnessSettings(payload: {
   shortcut?: string;
   defaultTargetLang?: string;
   provider?: {
+    kind?: SecureSettingsData['provider']['kind'];
     baseUrl?: string;
     model?: string;
     apiKey?: string;
+    secretId?: string;
+    secretKey?: string;
+    region?: string;
+    projectId?: string;
   };
 }) {
   harnessSettings = {
     provider: {
+      kind: payload.provider?.kind ?? harnessSettings.provider.kind ?? HARNESS_DEFAULT_SETTINGS.provider.kind,
       baseUrl: payload.provider?.baseUrl?.trim() || harnessSettings.provider.baseUrl || HARNESS_DEFAULT_SETTINGS.provider.baseUrl,
       model: payload.provider?.model?.trim() || harnessSettings.provider.model || HARNESS_DEFAULT_SETTINGS.provider.model,
       apiKey: payload.provider?.apiKey === undefined
         ? harnessSettings.provider.apiKey
         : payload.provider.apiKey?.trim() || undefined,
+      secretId: payload.provider?.secretId === undefined
+        ? harnessSettings.provider.secretId
+        : payload.provider.secretId?.trim() || undefined,
+      secretKey: payload.provider?.secretKey === undefined
+        ? harnessSettings.provider.secretKey
+        : payload.provider.secretKey?.trim() || undefined,
+      region: payload.provider?.region?.trim() || harnessSettings.provider.region || HARNESS_DEFAULT_SETTINGS.provider.region,
+      projectId: payload.provider?.projectId?.trim() || harnessSettings.provider.projectId || HARNESS_DEFAULT_SETTINGS.provider.projectId,
     },
     defaultTargetLang: payload.defaultTargetLang?.trim() || harnessSettings.defaultTargetLang || HARNESS_DEFAULT_SETTINGS.defaultTargetLang,
     shortcut: payload.shortcut?.trim() || harnessSettings.shortcut || HARNESS_DEFAULT_SETTINGS.shortcut,
@@ -335,6 +406,54 @@ async function executeCaptureSelection(payload: CaptureSelectionPayload) {
   notifyCaptureWindowClosed('closed', '截图窗口已完成并关闭。');
   windowManager.showMainWindow();
   return result;
+}
+
+function emitCaptureCancelled(message: string) {
+  const captureWindow = windowManager.getCaptureWindow();
+  const mainWindow = windowManager.getMainWindow();
+  const payload = { filePath: null, message };
+
+  if (captureWindow && !captureWindow.isDestroyed()) {
+    captureWindow.webContents.send(settingsChannels.captureCancelled, payload);
+  }
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send(settingsChannels.captureCancelled, payload);
+  }
+}
+
+async function startNativeCaptureSelection() {
+  const mainWindow = windowManager.getMainWindow();
+  const popupWindow = windowManager.getPopupWindow();
+
+  popupWindow?.hide();
+  mainWindow?.hide();
+
+  await new Promise((resolve) => setTimeout(resolve, 120));
+
+  try {
+    const result = await regionCaptureService.captureNativeSelection();
+    latestCapture = result;
+
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send(settingsChannels.captureCompleted, result);
+    }
+
+    return result;
+  } catch (error) {
+    const isCancelled = typeof error === 'object'
+      && error !== null
+      && 'code' in error
+      && error.code === 'SCREENSHOT_CAPTURE_CANCELLED';
+
+    if (isCancelled) {
+      emitCaptureCancelled('截图已取消。');
+      return null;
+    }
+
+    throw error;
+  } finally {
+    windowManager.showMainWindow();
+  }
 }
 
 async function readJsonBody(request: IncomingMessage) {
@@ -510,12 +629,8 @@ async function translateSelectedText() {
       body: JSON.stringify({
         text: sourceText,
         targetLang: settings.defaultTargetLang,
-        providerId: 'openai-compatible',
-        providerConfig: {
-          baseUrl: settings.provider.baseUrl,
-          model: settings.provider.model,
-          apiKey: settings.provider.apiKey,
-        },
+        providerId: settings.provider.kind,
+        providerConfig: buildProviderSecret(settings.provider),
       }),
     });
 
@@ -556,13 +671,14 @@ function registerShortcut(shortcut: string) {
   try {
     hotkeyService.register(shortcut, async () => {
       const capabilities = getDesktopCapabilities();
+      const shouldTrySelectedText = capabilities.accessibility.granted || isDevelopment();
 
-      if (capabilities.accessibility.granted) {
+      if (shouldTrySelectedText) {
         await translateSelectedText();
         return;
       }
 
-      windowManager.showCaptureWindow();
+      await startNativeCaptureSelection();
     });
     shortcutRegistrationIssue = null;
     return true;
@@ -602,14 +718,18 @@ app.whenReady().then(async () => {
       }
 
       const settings = await secureConfigService.getSettings();
-      return {
-        baseUrl: settings.provider.baseUrl,
-        model: settings.provider.model,
-        apiKey: settings.provider.apiKey ?? null,
-      };
+      return buildProviderSecret(settings.provider);
     });
     ipcMain.handle(settingsChannels.getCapabilities, async () => getDesktopCapabilities());
     ipcMain.handle(settingsChannels.refreshCapabilities, async () => getDesktopCapabilities());
+    ipcMain.handle(settingsChannels.relaunchApp, async () => {
+      setImmediate(() => {
+        app.relaunch();
+        app.quit();
+      });
+
+      return { relaunching: true };
+    });
     ipcMain.handle(settingsChannels.openAccessibilitySettings, async () => accessibilityService.openSettings());
     ipcMain.handle(settingsChannels.openScreenRecordingSettings, async () => accessibilityService.openScreenRecordingSettings());
 
@@ -621,9 +741,14 @@ app.whenReady().then(async () => {
           shortcut?: string;
           defaultTargetLang?: string;
           provider?: {
+            kind?: SecureSettingsData['provider']['kind'];
             baseUrl?: string;
             model?: string;
             apiKey?: string;
+            secretId?: string;
+            secretKey?: string;
+            region?: string;
+            projectId?: string;
           };
         },
       ) => {
@@ -635,12 +760,7 @@ app.whenReady().then(async () => {
             desktopMode: true,
             defaultTargetLang: saved.defaultTargetLang,
             runtimeMode: runtimeSnapshot.runtimeMode,
-            provider: {
-              baseUrl: saved.provider.baseUrl,
-              model: saved.provider.model,
-              apiKeyMasked: maskApiKey(saved.provider.apiKey),
-              hasApiKey: Boolean(saved.provider.apiKey),
-            },
+            provider: buildProviderSummary(saved.provider),
           };
         }
 
@@ -657,12 +777,7 @@ app.whenReady().then(async () => {
           desktopMode: true,
           defaultTargetLang: saved.defaultTargetLang,
           runtimeMode: runtimeSnapshot.runtimeMode,
-          provider: {
-            baseUrl: saved.provider.baseUrl,
-            model: saved.provider.model,
-            apiKeyMasked: maskApiKey(saved.provider.apiKey),
-            hasApiKey: Boolean(saved.provider.apiKey),
-          },
+          provider: buildProviderSummary(saved.provider),
         };
       },
     );
@@ -675,12 +790,36 @@ app.whenReady().then(async () => {
       const provider = {
         ...harnessSettings.provider,
         ...payload,
+        kind: payload?.kind ?? harnessSettings.provider.kind,
         baseUrl: payload?.baseUrl?.trim() || harnessSettings.provider.baseUrl,
         model: payload?.model?.trim() || harnessSettings.provider.model,
-        apiKey: payload?.apiKey?.trim() || harnessSettings.provider.apiKey,
+        apiKey: payload?.apiKey === undefined ? harnessSettings.provider.apiKey : payload.apiKey?.trim() || undefined,
+        secretId: payload?.secretId === undefined ? harnessSettings.provider.secretId : payload.secretId?.trim() || undefined,
+        secretKey: payload?.secretKey === undefined ? harnessSettings.provider.secretKey : payload.secretKey?.trim() || undefined,
+        region: payload?.region?.trim() || harnessSettings.provider.region,
+        projectId: payload?.projectId?.trim() || harnessSettings.provider.projectId,
       };
+      const effectiveProvider = getEffectiveProvider(provider);
 
-      if (!provider.baseUrl?.trim() || !provider.model?.trim() || !provider.apiKey?.trim()) {
+      if (effectiveProvider.kind === 'tencent') {
+        if (!effectiveProvider.secretId || !effectiveProvider.secretKey) {
+          return {
+            ok: false,
+            code: 'CONFIG_INCOMPLETE',
+            message: '请先填写 SecretId、SecretKey 和 Region。',
+            runtimeMode: 'mock' as RuntimeMode,
+          };
+        }
+
+        return testTencentCloudConnection({
+          secretId: effectiveProvider.secretId,
+          secretKey: effectiveProvider.secretKey,
+          region: effectiveProvider.region,
+          projectId: effectiveProvider.projectId,
+        });
+      }
+
+      if (!effectiveProvider.baseUrl?.trim() || !effectiveProvider.model?.trim() || !effectiveProvider.apiKey?.trim()) {
         return {
           ok: false,
           code: 'CONFIG_INCOMPLETE',
@@ -690,9 +829,9 @@ app.whenReady().then(async () => {
       }
 
       try {
-        const response = await fetch(`${provider.baseUrl.replace(/\/$/, '')}/models`, {
+        const response = await fetch(`${effectiveProvider.baseUrl.replace(/\/$/, '')}/models`, {
           headers: {
-            Authorization: `Bearer ${provider.apiKey}`,
+            Authorization: `Bearer ${effectiveProvider.apiKey}`,
           },
         });
 
@@ -734,14 +873,20 @@ app.whenReady().then(async () => {
       return { shortcut: currentShortcut };
     });
 
-    ipcMain.handle(settingsChannels.showOverlay, () => windowManager.showCaptureWindow());
+    ipcMain.handle(settingsChannels.showOverlay, async () => {
+      await startNativeCaptureSelection();
+      return { visible: false };
+    });
     ipcMain.handle(settingsChannels.showMainWindow, () => {
       windowManager.hidePopupWindow();
       return windowManager.showMainWindow();
     });
     ipcMain.handle(settingsChannels.hidePopupWindow, () => windowManager.hidePopupWindow());
     ipcMain.handle(settingsChannels.showPopupWindow, () => windowManager.showPopupWindow());
-    ipcMain.handle(settingsChannels.showCaptureWindow, () => windowManager.showCaptureWindow());
+    ipcMain.handle(settingsChannels.showCaptureWindow, async () => {
+      await startNativeCaptureSelection();
+      return { visible: false };
+    });
     ipcMain.handle(settingsChannels.getLatestCapture, async () => {
       if (!latestCapture?.filePath) {
         return null;
@@ -776,9 +921,15 @@ app.whenReady().then(async () => {
       return draft;
     });
     ipcMain.handle(settingsChannels.cancelCaptureSelection, () => {
+      const cancelled = regionCaptureService.cancelNativeSelection();
       windowManager.hideCaptureWindow();
-      windowManager.getCaptureWindow()?.webContents.send(settingsChannels.captureCancelled, { filePath: null, message: '截图已取消。' });
+      if (cancelled) {
+        return { visible: false };
+      } else {
+        windowManager.getCaptureWindow()?.webContents.send(settingsChannels.captureCancelled, { filePath: null, message: '截图已取消。' });
+      }
       notifyCaptureWindowClosed('closed', '截图窗口已关闭。');
+      windowManager.showMainWindow();
       return { visible: false };
     });
     ipcMain.handle(settingsChannels.submitCaptureSelection, async (_event, payload: CaptureSelectionPayload) => executeCaptureSelection(payload));

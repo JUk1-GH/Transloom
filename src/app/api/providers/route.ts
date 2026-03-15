@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import type { ProviderConfig, ProviderKind } from "@/domain/translation/provider";
 import { listProviderConfigs, saveProviderConfig } from "@/server/providers/provider-config-service";
 
-const providerKinds: ProviderKind[] = ["deepl", "openai", "google", "openai-compatible"];
+const providerKinds: ProviderKind[] = ["deepl", "openai", "google", "openai-compatible", "tencent"];
 
 function isProviderKind(value: unknown): value is ProviderKind {
   return typeof value === "string" && providerKinds.includes(value as ProviderKind);

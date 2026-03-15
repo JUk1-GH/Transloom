@@ -25,6 +25,7 @@ function getRuntimeSnapshot(provider: Awaited<ReturnType<typeof getDefaultProvid
     status,
     provider: provider
       ? {
+          kind: provider.kind,
           baseUrl: provider.baseUrl ?? '',
           model: provider.model ?? '',
           hasApiKey,

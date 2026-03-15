@@ -1,0 +1,10 @@
+fastapi>=0.116,<1
+uvicorn[standard]>=0.35,<1
+paddlepaddle>=3.2.0,<4
+paddleocr>=3.2.0,<4
+rapidocr>=3.7.0,<4
+onnxruntime>=1.24.0,<2
+pyobjc-framework-Cocoa>=12.1,<13
+pyobjc-framework-Quartz>=12.1,<13
+pyobjc-framework-Vision>=12.1,<13
+Pillow>=11,<12

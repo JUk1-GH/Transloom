@@ -6,6 +6,26 @@ import { PermissionOnboarding, type DesktopCapabilities } from '@/components/des
 import { AppShell } from '@/components/ui/app-shell';
 import { TextTranslationWorkspace } from '@/components/workspace/text-translation-workspace';
 import { desktopClient } from '@/lib/ipc/desktop-client';
+import {
+  OCR_ENDPOINT_STORAGE_KEY,
+  OCR_ENGINE_STORAGE_KEY,
+  isLocalScreenshotOcrEngine,
+  normalizeLocalOcrEndpoint,
+  type ScreenshotOcrEngine,
+} from '@/lib/ocr/local-ocr-config';
+
+const mockCaptureOverlay: OverlayDocument = {
+  imagePath: 'mock://overlay-preview',
+  imageWidth: 960,
+  imageHeight: 600,
+  mode: 'mock',
+  provider: 'openai-compatible',
+  regions: [
+    { id: 'region-1', sourceText: 'Settings', translatedText: '设置', box: { x: 72, y: 94, width: 180, height: 52 }, backgroundColor: 'rgba(255,255,255,0.88)', fontSize: 18 },
+    { id: 'region-2', sourceText: 'Start translating', translatedText: '开始翻译', box: { x: 118, y: 190, width: 240, height: 56 }, backgroundColor: 'rgba(196,181,253,0.9)', fontSize: 18 },
+  ],
+  warning: '当前为浏览器预览，展示的是内置模拟截图结果。',
+};
 
 export default function Home() {
   const [capabilities, setCapabilities] = useState<DesktopCapabilities | null>(null);
@@ -14,9 +34,35 @@ export default function Home() {
   const [popupState, setPopupState] = useState<PopupTranslationState | null>(null);
   const [latestCapture, setLatestCapture] = useState<{ filePath: string; capturedAt: string } | null>(null);
   const [captureOverlay, setCaptureOverlay] = useState<OverlayDocument | null>(null);
-  const [captureMessage, setCaptureMessage] = useState('截图结果会直接回到当前工作区。');
+  const [captureMessage, setCaptureMessage] = useState('截图会直接回到当前工作区。');
   const [captureLoading, setCaptureLoading] = useState(false);
   const workspaceSectionRef = useRef<HTMLDivElement | null>(null);
+  const shouldShowPermissionOnboarding = Boolean(
+    capabilities?.desktopAvailable
+      && (!capabilities.accessibility.granted || !capabilities.screenRecording?.granted),
+  );
+
+  const readCaptureOcrSettings = useCallback(() => {
+    if (typeof window === 'undefined') {
+      return {
+        ocrEngine: 'cloud-vision' as ScreenshotOcrEngine,
+        localOcrEndpoint: undefined,
+      };
+    }
+
+    const savedEngine = window.localStorage.getItem(OCR_ENGINE_STORAGE_KEY);
+    const ocrEngine: ScreenshotOcrEngine = savedEngine === 'local-paddleocr' || savedEngine === 'rapidocr' || savedEngine === 'apple-vision'
+      ? savedEngine
+      : 'cloud-vision';
+    const savedEndpoint = window.localStorage.getItem(OCR_ENDPOINT_STORAGE_KEY);
+
+    return {
+      ocrEngine,
+      localOcrEndpoint: isLocalScreenshotOcrEngine(ocrEngine)
+        ? normalizeLocalOcrEndpoint(savedEndpoint)
+        : undefined,
+    };
+  }, []);
 
   const mapOverlayToWorkspaceDraft = useCallback((overlay: OverlayDocument, capturedAt?: string): WorkspaceDraftState => {
     const sourceText = overlay.regions.map((region) => region.sourceText).filter(Boolean).join('\n');
@@ -41,29 +87,37 @@ export default function Home() {
   const runCaptureTranslation = useCallback(async (imagePath: string, capturedAt?: string) => {
     setCaptureOverlay(null);
     setCaptureLoading(true);
-    setCaptureMessage('正在执行 OCR 与翻译...');
+    setCaptureMessage('正在处理截图…');
 
     try {
       const providerSecret = desktopClient.isAvailable() ? await desktopClient.getProviderSecret() : undefined;
       const targetLang = workspaceDraft?.targetLang ?? popupState?.targetLang ?? 'zh-CN';
+      const captureOcrSettings = readCaptureOcrSettings();
       const response = await fetch('/api/capture/translate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           imagePath,
           targetLang,
-          providerId: 'openai-compatible',
+          ocrEngine: captureOcrSettings.ocrEngine,
+          localOcrEndpoint: captureOcrSettings.localOcrEndpoint,
+          providerId: providerSecret?.kind ?? 'openai-compatible',
           providerConfig: {
+            kind: providerSecret?.kind,
             baseUrl: providerSecret?.baseUrl,
             model: providerSecret?.model,
             apiKey: providerSecret?.apiKey ?? undefined,
+            secretId: providerSecret?.secretId ?? undefined,
+            secretKey: providerSecret?.secretKey ?? undefined,
+            region: providerSecret?.region,
+            projectId: providerSecret?.projectId,
           },
         }),
       });
 
       const payload = await response.json();
       if (!response.ok) {
-        setCaptureMessage(payload.message ?? payload.code ?? '截屏翻译失败。');
+        setCaptureMessage(payload.message ?? payload.code ?? '截图处理失败。');
         return;
       }
 
@@ -71,16 +125,16 @@ export default function Home() {
       const nextDraft = mapOverlayToWorkspaceDraft(nextOverlay, capturedAt);
       setCaptureOverlay(nextOverlay);
       setWorkspaceDraft(nextDraft);
-      setCaptureMessage(nextOverlay.warning ?? (nextOverlay.mode === 'mock' ? '已使用 Mock 截图翻译完成。' : '截图翻译完成。'));
+      setCaptureMessage(nextOverlay.warning ?? (nextOverlay.mode === 'mock' ? '已载入模拟截图结果。' : '截图结果已更新。'));
       requestAnimationFrame(() => {
         workspaceSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
       });
     } catch (error) {
-      setCaptureMessage(error instanceof Error ? error.message : '截屏翻译失败。');
+      setCaptureMessage(error instanceof Error ? error.message : '截图处理失败。');
     } finally {
       setCaptureLoading(false);
     }
-  }, [mapOverlayToWorkspaceDraft, popupState?.targetLang, workspaceDraft?.targetLang]);
+  }, [mapOverlayToWorkspaceDraft, popupState?.targetLang, readCaptureOcrSettings, workspaceDraft?.targetLang]);
 
   useEffect(() => {
     let cancelled = false;
@@ -183,11 +237,21 @@ export default function Home() {
     scrollToWorkspace();
 
     if (!desktopClient.isAvailable()) {
-      setCaptureMessage('当前是浏览器预览环境，请先使用 Mock Overlay。');
+      setCaptureOverlay(mockCaptureOverlay);
+      setWorkspaceDraft(mapOverlayToWorkspaceDraft(mockCaptureOverlay));
+      setCaptureMessage('当前为浏览器预览，已载入示例截图识别结果。');
       return;
     }
 
     await desktopClient.showCaptureWindow();
+  }
+
+  async function handleOpenQuickPopupFromWorkspace() {
+    if (!desktopClient.isAvailable()) {
+      return;
+    }
+
+    await desktopClient.showPopupWindow();
   }
 
   return (
@@ -202,32 +266,6 @@ export default function Home() {
             isLoading: captureLoading,
             latestCapturePath: latestCapture?.filePath ?? null,
             onOpenCapture: () => void handleOpenCaptureFromWorkspace(),
-            onRetranslateLatest: () => {
-              if (latestCapture?.filePath) {
-                void runCaptureTranslation(latestCapture.filePath, latestCapture.capturedAt);
-              }
-            },
-            onPreviewMockOverlay: !capabilities?.desktopAvailable
-              ? () => {
-                  const mockOverlay: OverlayDocument = {
-                    imagePath: 'mock://overlay-preview',
-                    imageWidth: 960,
-                    imageHeight: 600,
-                    mode: 'mock',
-                    provider: 'openai-compatible',
-                    regions: [
-                      { id: 'region-1', sourceText: 'Settings', translatedText: '设置', box: { x: 72, y: 94, width: 180, height: 52 }, backgroundColor: 'rgba(255,255,255,0.88)', fontSize: 18 },
-                      { id: 'region-2', sourceText: 'Start translating', translatedText: '开始翻译', box: { x: 118, y: 190, width: 240, height: 56 }, backgroundColor: 'rgba(196,181,253,0.9)', fontSize: 18 },
-                    ],
-                    warning: '当前为浏览器预览，展示的是内置 mock overlay。',
-                  };
-
-                  setCaptureOverlay(mockOverlay);
-                  setWorkspaceDraft(mapOverlayToWorkspaceDraft(mockOverlay));
-                  setCaptureMessage('当前为浏览器预览，已加载内置 mock overlay。');
-                  scrollToWorkspace();
-                }
-              : undefined,
             actionDisabledReason: capabilities?.desktopAvailable
               ? !capabilities?.screenRecording?.granted
                 ? '还没有“屏幕录制”权限。'
@@ -235,7 +273,12 @@ export default function Home() {
               : null,
             desktopAvailable: Boolean(capabilities?.desktopAvailable),
           }}
-          sidebarBottom={capabilities ? (
+          popup={{
+            onOpen: () => void handleOpenQuickPopupFromWorkspace(),
+            desktopAvailable: Boolean(capabilities?.desktopAvailable),
+            state: popupState,
+          }}
+          sidebarBottom={shouldShowPermissionOnboarding ? (
             <PermissionOnboarding
               capabilities={capabilities}
               refreshing={refreshing}

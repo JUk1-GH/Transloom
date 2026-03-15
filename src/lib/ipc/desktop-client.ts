@@ -1,39 +1,79 @@
 import type { CaptureSelectionPayload, PopupTranslationState, WorkspaceDraftState } from '@/domain/capture/types';
+import type { ProviderKind } from '@/domain/translation/provider';
+
+type RuntimeStatus = 'ready' | 'provider-missing' | 'model-missing' | 'api-key-missing' | 'mock-fallback';
+
+export interface DesktopProviderSummary {
+  kind: ProviderKind;
+  baseUrl: string;
+  model: string;
+  apiKeyMasked?: string;
+  hasApiKey: boolean;
+  secretId?: string;
+  secretKeyMasked?: string;
+  hasSecretKey?: boolean;
+  region?: string;
+  projectId?: string;
+}
+
+export interface DesktopRuntimeSnapshot {
+  runtimeMode: 'real' | 'mock';
+  status?: RuntimeStatus;
+  baseUrl: string | null;
+  model: string | null;
+  hasApiKey: boolean;
+  provider?: {
+    kind: ProviderKind;
+    baseUrl: string;
+    model: string;
+    hasApiKey: boolean;
+    enabled?: boolean;
+    label?: string;
+    region?: string;
+    projectId?: string;
+  };
+}
+
+export interface DesktopProviderSecret {
+  kind: ProviderKind;
+  baseUrl: string;
+  model: string;
+  apiKey: string | null;
+  secretId: string | null;
+  secretKey: string | null;
+  region: string;
+  projectId: string;
+}
+
+export interface DesktopSettingsPayload {
+  shortcut: string;
+  desktopMode: boolean;
+  defaultTargetLang: string;
+  runtimeMode: 'real' | 'mock';
+  provider: DesktopProviderSummary;
+}
+
+export interface DesktopSettingsUpdate {
+  shortcut?: string;
+  defaultTargetLang?: string;
+  provider?: {
+    kind?: Extract<ProviderKind, 'openai-compatible' | 'tencent'>;
+    baseUrl?: string;
+    model?: string;
+    apiKey?: string;
+    secretId?: string;
+    secretKey?: string;
+    region?: string;
+    projectId?: string;
+  };
+}
 
 declare global {
   interface Window {
     transloomDesktop?: {
-      getSettings: () => Promise<{
-        shortcut: string;
-        desktopMode: boolean;
-        defaultTargetLang: string;
-        runtimeMode: 'real' | 'mock';
-        provider: {
-          baseUrl: string;
-          model: string;
-          apiKeyMasked?: string;
-          hasApiKey: boolean;
-        };
-      }>;
-      getRuntimeMode: () => Promise<{
-        runtimeMode: 'real' | 'mock';
-        status?: 'ready' | 'provider-missing' | 'model-missing' | 'api-key-missing' | 'mock-fallback';
-        baseUrl: string | null;
-        model: string | null;
-        hasApiKey: boolean;
-        provider: {
-          baseUrl: string;
-          model: string;
-          hasApiKey: boolean;
-          enabled?: boolean;
-          label?: string;
-        };
-      }>;
-      getProviderSecret: () => Promise<{
-        baseUrl: string;
-        model: string;
-        apiKey: string | null;
-      }>;
+      getSettings: () => Promise<DesktopSettingsPayload>;
+      getRuntimeMode: () => Promise<DesktopRuntimeSnapshot>;
+      getProviderSecret: () => Promise<DesktopProviderSecret>;
       getCapabilities: () => Promise<{
         desktopAvailable: boolean;
         accessibility: {
@@ -72,33 +112,11 @@ declare global {
           requiresShortcut: boolean;
         };
       }>;
+      relaunchApp: () => Promise<{ relaunching: boolean }>;
       openAccessibilitySettings: () => Promise<{ opened: boolean }>;
       openScreenRecordingSettings: () => Promise<{ opened: boolean }>;
-      saveSettings: (payload: {
-        shortcut?: string;
-        defaultTargetLang?: string;
-        provider?: {
-          baseUrl?: string;
-          model?: string;
-          apiKey?: string;
-        };
-      }) => Promise<{
-        shortcut: string;
-        desktopMode: boolean;
-        defaultTargetLang: string;
-        runtimeMode: 'real' | 'mock';
-        provider: {
-          baseUrl: string;
-          model: string;
-          apiKeyMasked?: string;
-          hasApiKey: boolean;
-        };
-      }>;
-      testProviderConnection: (payload?: {
-        baseUrl?: string;
-        model?: string;
-        apiKey?: string;
-      }) => Promise<{
+      saveSettings: (payload: DesktopSettingsUpdate) => Promise<DesktopSettingsPayload>;
+      testProviderConnection: (payload?: DesktopSettingsUpdate['provider']) => Promise<{
         ok: boolean;
         code: string;
         message: string;
@@ -144,16 +162,19 @@ export const desktopClient = {
   refreshCapabilities() {
     return window.transloomDesktop?.refreshCapabilities();
   },
+  relaunchApp() {
+    return window.transloomDesktop?.relaunchApp();
+  },
   openAccessibilitySettings() {
     return window.transloomDesktop?.openAccessibilitySettings();
   },
   openScreenRecordingSettings() {
     return window.transloomDesktop?.openScreenRecordingSettings();
   },
-  saveSettings(payload: { shortcut?: string; defaultTargetLang?: string; provider?: { baseUrl?: string; model?: string; apiKey?: string } }) {
+  saveSettings(payload: DesktopSettingsUpdate) {
     return window.transloomDesktop?.saveSettings(payload);
   },
-  testProviderConnection(payload?: { baseUrl?: string; model?: string; apiKey?: string }) {
+  testProviderConnection(payload?: DesktopSettingsUpdate['provider']) {
     return window.transloomDesktop?.testProviderConnection(payload);
   },
   setShortcut(shortcut: string) {

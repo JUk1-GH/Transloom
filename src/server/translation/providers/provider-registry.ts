@@ -4,12 +4,14 @@ import { customOpenAiCompatibleProvider } from "@/server/translation/providers/c
 import { deeplProvider } from "@/server/translation/providers/deepl-provider";
 import { googleProvider } from "@/server/translation/providers/google-provider";
 import { openAiProvider } from "@/server/translation/providers/openai-provider";
+import { tencentCloudProvider } from "@/server/translation/providers/tencent-cloud-provider";
 
 export const providerRegistry: Record<ProviderKind, TranslationProvider> = {
   deepl: deeplProvider,
   openai: openAiProvider,
   google: googleProvider,
   "openai-compatible": customOpenAiCompatibleProvider,
+  tencent: tencentCloudProvider,
 };
 
 export async function resolveProvider(providerId?: string): Promise<TranslationProvider> {

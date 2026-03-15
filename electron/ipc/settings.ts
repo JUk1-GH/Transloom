@@ -11,6 +11,7 @@ export const settingsChannels = {
   showPopupWindow: 'desktop:show-popup-window',
   getCapabilities: 'desktop:get-capabilities',
   refreshCapabilities: 'desktop:refresh-capabilities',
+  relaunchApp: 'desktop:relaunch-app',
   openAccessibilitySettings: 'desktop:open-accessibility-settings',
   openScreenRecordingSettings: 'desktop:open-screen-recording-settings',
   showCaptureWindow: 'desktop:show-capture-window',

@@ -10,9 +10,14 @@ const translateRequestSchema = z.object({
   providerId: z.string().trim().optional(),
   providerConfig: z
     .object({
+      kind: z.enum(["deepl", "openai", "google", "openai-compatible", "tencent"]).optional(),
       baseUrl: z.string().trim().optional(),
       model: z.string().trim().optional(),
       apiKey: z.string().trim().optional(),
+      secretId: z.string().trim().optional(),
+      secretKey: z.string().trim().optional(),
+      region: z.string().trim().optional(),
+      projectId: z.union([z.string().trim(), z.number()]).optional(),
     })
     .optional(),
 });

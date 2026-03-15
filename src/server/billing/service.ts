@@ -1,13 +1,15 @@
-import { getUsageSummary } from "@/server/usage/service";
+import { getDefaultProvider } from '@/server/providers/provider-config-service';
+import { getUsageSummary } from '@/server/usage/service';
 
 export async function getBillingSummary() {
-  const usage = await getUsageSummary();
+  const [usage, provider] = await Promise.all([getUsageSummary(), getDefaultProvider()]);
+  const byokEnabled = Boolean(provider?.enabled && provider?.hasApiKey);
 
   return {
-    plan: "local",
-    byokEnabled: true,
+    plan: 'local',
+    byokEnabled,
     checkoutReady: false,
-    subscriptionStatus: "disabled",
+    subscriptionStatus: 'disabled',
     monthlyCharacters: usage.monthlyCharacters,
     requestCount: usage.requestCount,
   };

@@ -23,6 +23,19 @@ function buildOcrPrompt() {
   ].join(' ');
 }
 
+function extractJsonObject(content: string) {
+  const fencedMatch = content.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+  const normalized = (fencedMatch?.[1] ?? content).trim();
+  const firstBrace = normalized.indexOf('{');
+  const lastBrace = normalized.lastIndexOf('}');
+
+  if (firstBrace === -1 || lastBrace === -1 || lastBrace < firstBrace) {
+    throw new OcrProviderError('INVALID_OCR_JSON', 'OCR provider 返回的内容不是有效 JSON。', 502);
+  }
+
+  return normalized.slice(firstBrace, lastBrace + 1);
+}
+
 function normalizeOcrResult(payload: unknown) {
   if (!payload || typeof payload !== 'object') {
     throw new OcrProviderError('INVALID_OCR_PAYLOAD', 'OCR provider 没有返回有效结果。', 502);
@@ -148,7 +161,22 @@ export const openAiVisionProvider: OcrEngine = {
         throw new OcrProviderError('EMPTY_OCR_RESPONSE', 'OCR provider 没有返回可解析内容。', 502);
       }
 
-      return normalizeOcrResult(JSON.parse(content));
+      let parsedContent: unknown;
+      try {
+        parsedContent = JSON.parse(extractJsonObject(content));
+      } catch (error) {
+        if (error instanceof OcrProviderError) {
+          throw error;
+        }
+
+        throw new OcrProviderError(
+          'INVALID_OCR_JSON',
+          'OCR provider 返回了不完整的 JSON，已跳过本次识别。',
+          502,
+        );
+      }
+
+      return normalizeOcrResult(parsedContent);
     } catch (error) {
       if (error instanceof OcrProviderError) {
         throw error;

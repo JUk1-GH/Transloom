@@ -46,7 +46,7 @@ export function createWindowManager(preloadPath: string) {
       emitCaptureWindowClosed('closed');
     });
 
-    void captureWindow.loadURL(`${rendererBaseUrl}/capture?mode=overlay`);
+    void captureWindow.loadURL(`${rendererBaseUrl}/internal/capture-overlay`);
     return captureWindow;
   }
 

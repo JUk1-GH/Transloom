@@ -22,7 +22,7 @@ function buildAccessibilityMessage(granted: boolean) {
     return '已授予辅助功能权限，可使用选中文本后按快捷键弹出翻译小窗。';
   }
 
-  return '未授予辅助功能权限。选中文本后按快捷键弹窗翻译暂不可用，但文本翻译与区域截图仍可继续使用。';
+  return '未授予辅助功能权限。选中文本后按快捷键弹窗翻译暂不可用，但文本翻译与区域截图仍可继续使用。如果你刚刚已在系统设置中允许 Transloom，请完全退出并重新打开应用后再检查。';
 }
 
 function buildScreenRecordingMessage(granted: boolean) {

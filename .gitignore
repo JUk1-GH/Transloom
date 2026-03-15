@@ -61,5 +61,16 @@ translate-snapshot.md
 /capture-errors.log
 /round*.png
 /round*.md
+/account-*.png
+/billing-*.png
+/capture-*.png
+/glossary-*.png
+/home-*.png
+/playwright-*.log
+/*-round*.png
+/*-round*.md
+/*985x713*.png
 /history-*.png
 /settings-*.png
+__pycache__/
+*.pyc
