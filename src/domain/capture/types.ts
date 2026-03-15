@@ -61,6 +61,7 @@ export interface WorkspaceDraftState {
   sourceLang?: string;
   warning?: string;
   ocrElapsedMs?: number;
+  ocrEngine?: 'cloud-vision' | 'local-paddleocr' | 'rapidocr' | 'apple-vision';
   updatedAt: string;
   sourceType?: 'text' | 'popup' | 'capture';
   capture?: {

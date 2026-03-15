@@ -7,6 +7,7 @@ import type { OverlayDocument, PopupTranslationState, WorkspaceDraftState } from
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { desktopClient } from '@/lib/ipc/desktop-client';
+import type { ScreenshotOcrEngine } from '@/lib/ocr/local-ocr-config';
 
 type GlossarySummary = {
   id: string;
@@ -139,6 +140,21 @@ function formatElapsedTime(elapsedMs: number) {
   return `${(elapsedMs / 1000).toFixed(1)}s`;
 }
 
+function getOcrEngineLabel(engine: ScreenshotOcrEngine | null) {
+  switch (engine) {
+    case 'local-paddleocr':
+      return 'PaddleOCR';
+    case 'rapidocr':
+      return 'RapidOCR';
+    case 'apple-vision':
+      return 'Apple Vision';
+    case 'cloud-vision':
+      return '云端视觉';
+    default:
+      return 'OCR';
+  }
+}
+
 function pickGlossaryForLanguages(options: GlossarySummary[], sourceLang: string, targetLang: string) {
   const normalizedSource = normalizeLanguage(sourceLang);
   const normalizedTarget = normalizeLanguage(targetLang);
@@ -203,6 +219,7 @@ export function TextTranslationWorkspace({
   const [error, setError] = useState<string | null>(null);
   const [charactersBilled, setCharactersBilled] = useState<number | null>(null);
   const [ocrElapsedMs, setOcrElapsedMs] = useState<number | null>(workspaceDraft?.ocrElapsedMs ?? null);
+  const [ocrEngine, setOcrEngine] = useState<ScreenshotOcrEngine | null>(workspaceDraft?.ocrEngine ?? null);
   const [translationElapsedMs, setTranslationElapsedMs] = useState<number | null>(null);
   const [activeTab, setActiveTab] = useState<WorkspaceTab>(
     workspaceDraft?.sourceType === 'popup'
@@ -227,6 +244,7 @@ export function TextTranslationWorkspace({
     setError(null);
     setCharactersBilled(null);
     setOcrElapsedMs(draft.ocrElapsedMs ?? null);
+    setOcrEngine(draft.ocrEngine ?? null);
     setTranslationElapsedMs(null);
   }, [invalidatePendingTranslation]);
 
@@ -679,6 +697,7 @@ export function TextTranslationWorkspace({
   const providerMetaLabel = translatedText
     ? `${providerLabel} · ${translationMode === 'mock' ? '模拟' : modelStatusLabel}`
     : `${providerLabel} · ${runtimeModeLabel}`;
+  const ocrMetaLabel = ocrElapsedMs !== null ? `${getOcrEngineLabel(ocrEngine)} ${formatElapsedTime(ocrElapsedMs)}` : null;
   const footerStatusMessage = capture?.actionDisabledReason ?? statusMessage;
   const footerStatusTone = capture?.actionDisabledReason ? 'text-[#8c6b12]' : statusTone;
   const translateButtonLabel = isLoading ? '翻译中...' : translationTriggerMode === 'auto' ? '立即翻译' : translatedText ? '重新翻译' : '翻译';
@@ -695,6 +714,7 @@ export function TextTranslationWorkspace({
     setWarning(null);
     setCharactersBilled(null);
     setOcrElapsedMs(null);
+    setOcrEngine(null);
     setTranslationElapsedMs(null);
   }
 
@@ -877,6 +897,7 @@ export function TextTranslationWorkspace({
                     setSource(event.target.value);
                     if (ocrElapsedMs !== null) {
                       setOcrElapsedMs(null);
+                      setOcrEngine(null);
                     }
                   }}
                   className='h-full min-h-[440px] resize-none border-0 bg-transparent p-5 pb-20 text-[15px] leading-relaxed text-[#2b2f36] shadow-none focus:border-0 focus-visible:ring-0'
@@ -886,7 +907,7 @@ export function TextTranslationWorkspace({
 
                 <div className='pointer-events-none absolute bottom-4 left-4 flex flex-wrap items-center gap-3 text-[12px] text-[#a0a5ae]'>
                   <span>{sourceCharacters} 字符</span>
-                  {ocrElapsedMs !== null ? <span>OCR {formatElapsedTime(ocrElapsedMs)}</span> : null}
+                  {ocrMetaLabel ? <span>{ocrMetaLabel}</span> : null}
                 </div>
 
                 {source.trim() && translationTriggerMode === 'manual' ? (

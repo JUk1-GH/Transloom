@@ -99,6 +99,7 @@ export default function Home() {
       targetLang: workspaceDraft?.targetLang ?? popupState?.targetLang ?? 'zh-CN',
       warning: ocr.warning,
       ocrElapsedMs,
+      ocrEngine: ocr.ocrEngine,
       updatedAt: new Date().toISOString(),
       sourceType: 'capture',
       capture: {

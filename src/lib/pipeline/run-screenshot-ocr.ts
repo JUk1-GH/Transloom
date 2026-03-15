@@ -17,6 +17,7 @@ export interface ScreenshotOcrResponse {
   imageHeight: number;
   mode: RuntimeMode;
   provider: string;
+  ocrEngine: ScreenshotOcrEngine;
   warning?: string;
   regions: Array<{
     id: string;
@@ -130,6 +131,7 @@ export async function runScreenshotOcr(imagePath: string, options: ScreenshotOcr
     imageHeight: ocr.imageHeight,
     mode,
     provider,
+    ocrEngine: options.ocrEngine ?? 'cloud-vision',
     warning,
     regions: ocr.regions.map((region) => ({
       id: region.id,
