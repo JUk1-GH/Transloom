@@ -223,7 +223,7 @@ export function AppShell({
                     className={clsx(
                       'flex items-center gap-2.5 rounded-[8px] border px-3 py-2 text-[14px] font-medium transition-colors duration-150',
                       active
-                        ? 'border-[#d5d5d5] bg-[#e9e9eb] text-[#191919] shadow-[0_1px_1px_rgba(0,0,0,0.04)]'
+                        ? 'border-[#242529] bg-[#242529] !text-white shadow-[0_1px_2px_rgba(0,0,0,0.08)]'
                         : 'border-transparent text-[#585c63] hover:bg-[#ececed] hover:text-[#202226]',
                     )}
                   >
@@ -248,7 +248,7 @@ export function AppShell({
                     className={clsx(
                       'flex items-center gap-2.5 rounded-[8px] border px-3 py-2 text-[14px] font-medium transition-colors duration-150',
                       active
-                        ? 'border-[#d5d5d5] bg-[#e9e9eb] text-[#191919] shadow-[0_1px_1px_rgba(0,0,0,0.04)]'
+                        ? 'border-[#242529] bg-[#242529] !text-white shadow-[0_1px_2px_rgba(0,0,0,0.08)]'
                         : 'border-transparent text-[#585c63] hover:bg-[#ececed] hover:text-[#202226]',
                     )}
                   >
@@ -276,7 +276,7 @@ export function AppShell({
                       className={clsx(
                         'inline-flex items-center gap-2 whitespace-nowrap rounded-[10px] border px-3 py-1.5 text-sm font-medium transition',
                         active
-                          ? 'border-[#d0d0d0] bg-white text-[#1e1e1f]'
+                          ? 'border-[#242529] bg-[#242529] !text-white'
                           : 'border-[#e0e0e0] bg-[#fafafa] text-[#565a61] hover:bg-white',
                       )}
                     >

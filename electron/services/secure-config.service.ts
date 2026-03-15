@@ -10,6 +10,7 @@ import {
 } from './tencent-cloud.service';
 
 export type RuntimeMode = 'real' | 'mock';
+export type TranslationTriggerMode = 'manual' | 'auto';
 type SecureProviderKind = Extract<ProviderKind, 'openai-compatible' | 'tencent'>;
 
 interface SecureProviderSettings {
@@ -27,12 +28,14 @@ export interface SecureSettingsData {
   provider: SecureProviderSettings;
   defaultTargetLang: string;
   shortcut: string;
+  translationTriggerMode: TranslationTriggerMode;
 }
 
 type SecureSettingsUpdate = {
   provider?: Partial<SecureSettingsData['provider']>;
   defaultTargetLang?: string;
   shortcut?: string;
+  translationTriggerMode?: TranslationTriggerMode;
 };
 
 const DEFAULT_SETTINGS: SecureSettingsData = {
@@ -45,6 +48,7 @@ const DEFAULT_SETTINGS: SecureSettingsData = {
   },
   defaultTargetLang: 'zh-CN',
   shortcut: 'CommandOrControl+Shift+2',
+  translationTriggerMode: 'manual',
 };
 
 function getSettingsPath() {
@@ -92,6 +96,7 @@ function normalizeSettings(raw?: Partial<SecureSettingsData>): SecureSettingsDat
     },
     defaultTargetLang: raw?.defaultTargetLang?.trim() || DEFAULT_SETTINGS.defaultTargetLang,
     shortcut: raw?.shortcut?.trim() || DEFAULT_SETTINGS.shortcut,
+    translationTriggerMode: raw?.translationTriggerMode === 'auto' ? 'auto' : DEFAULT_SETTINGS.translationTriggerMode,
   };
 }
 

@@ -113,8 +113,11 @@ npm run harness -- fail --task FT-001 --role implementer --owner claude-local --
 - It boots or reuses a live web surface, prompts Claude to use the actual product, find rough edges, fix the highest-value issue, re-test the flow, and then continue to the next small win.
 - Each round writes a durable prompt pack, `session.log`, `claude.debug.log`, and `result.json` under `.harness/product-runs/<run-id>/`.
 - Before every round it also rebuilds `.harness/state/product-memory.json` from historical `result.json` handoffs so the next prompt is driven by long-term memory instead of only the latest summary.
+- The product loop now defaults to `--setting-sources local`, so unattended runs stay isolated from noisy user-level Claude hooks and plugins.
 - The loop keeps going until Claude explicitly sets `continueAutopilot` to `false`, too many recoverable round failures accumulate, or you stop the process.
 - The watchdog now detects stalled local Bash background tasks (for example, `TaskOutput` timing out while the task is still `running`), kills Claude's whole process group early, and lets the outer loop retry the next round instead of staying dead after one hung child.
+- When a round writes mildly malformed JSON (for example JS-style `\'` escapes or raw control characters inside a string), the loop repairs those syntax issues before validating `result.json` so one nearly-correct handoff does not fake-fail the whole automation.
+- If Claude exits without any valid `result.json`, the loop now auto-writes a durable fail handoff with `continueAutopilot: true` so unattended iteration can keep going instead of burning the whole loop on a fake-success exit.
 - The prompt now carries forward open threads, recent wins, and a recent-file cooldown list so unfinished work gets continued while already-good areas are less likely to be churned again.
 - If a round re-touches a file from the cooldown list, its `result.json` must include `revisitJustification` or the handoff is rejected as invalid.
 - `harness:autopilot` now launches the product-iteration loop in detached background mode.

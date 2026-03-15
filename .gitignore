@@ -74,3 +74,5 @@ translate-snapshot.md
 /settings-*.png
 __pycache__/
 *.pyc
+.tmp/
+test-results/

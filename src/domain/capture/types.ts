@@ -60,6 +60,7 @@ export interface WorkspaceDraftState {
   targetLang: string;
   sourceLang?: string;
   warning?: string;
+  ocrElapsedMs?: number;
   updatedAt: string;
   sourceType?: 'text' | 'popup' | 'capture';
   capture?: {

@@ -25,14 +25,15 @@ const MEMORY_DEFAULTS = Object.freeze({
 const DEFAULTS = Object.freeze({
   owner: 'claude-product-loop',
   permissionMode: 'auto',
-  settingSources: 'user,local',
+  settingSources: 'local',
   outputFormat: 'stream-json',
   includePartialMessages: true,
   allowConfiguredMcp: true,
-  allowSlashCommands: true,
+  allowSlashCommands: false,
   allowSessionPersistence: false,
   enableDebugFile: true,
   disableTelemetry: true,
+  model: 'claude-sonnet-4-6',
   baseUrl: 'http://127.0.0.1:3003',
   ensureWeb: true,
   webBootTimeoutMs: 120_000,
@@ -46,7 +47,66 @@ const DEFAULTS = Object.freeze({
   maxRuntimeMs: 2 * 60 * 60_000,
   killGraceMs: 5_000,
 });
-const MAX_RECOVERABLE_ROUND_FAILURES = 3;
+const MAX_RECOVERABLE_ROUND_FAILURES = 8;
+const MAX_TRANSIENT_RECOVERY_DELAY_MS = 10 * 60_000;
+const TRANSIENT_RECOVERY_STEP_MS = 60_000;
+const ROUND_FAILURE_BACKOFF_STEP_MS = 15_000;
+const FAILURE_SIGNATURES = Object.freeze([
+  {
+    category: 'upstream',
+    code: 'deactivated_workspace',
+    pattern: /deactivated_workspace/i,
+    reason: 'Claude workspace is deactivated (deactivated_workspace)',
+  },
+  {
+    category: 'upstream',
+    code: 'model_not_found',
+    pattern: /model_not_found|404 status code \(no body\)|404\s+\{"error"/i,
+    reason: 'Claude upstream returned model_not_found or HTTP 404',
+  },
+  {
+    category: 'upstream',
+    code: 'invalid_api_key',
+    pattern: /invalid x-api-key|invalid api key|401\b/i,
+    reason: 'Claude upstream rejected credentials (401 / invalid api key)',
+  },
+  {
+    category: 'protocol',
+    code: 'missing_tool_name',
+    pattern: /Missing required parameter: 'input\[\d+\]\.name'|No such tool available:\s*$/i,
+    reason: 'Claude emitted a malformed tool call with a missing tool name or input slot',
+  },
+  {
+    category: 'protocol',
+    code: 'invalid_todowrite_payload',
+    pattern: /TodoWrite failed .*required parameter `todos` is missing/i,
+    reason: 'Claude emitted an invalid TodoWrite payload without todos',
+  },
+  {
+    category: 'protocol',
+    code: 'malformed_stream_payload',
+    pattern: /Content block not found|not valid JSON|Unexpected token '\\]'/i,
+    reason: 'Claude stream or proxy returned malformed content payloads',
+  },
+  {
+    category: 'protocol',
+    code: 'malformed_tool_input',
+    pattern: /Error normalizing tool input|expected string, received undefined|expected array, received undefined|required parameter `command` is missing|required parameter `file_path` is missing|required parameter `description` is missing|required parameter `prompt` is missing|required parameter `url` is missing/i,
+    reason: 'Claude emitted malformed tool input payloads during the round',
+  },
+  {
+    category: 'round',
+    code: 'ended_after_note',
+    pattern: /Blast radius note:/i,
+    reason: 'Claude ended the round after a blast-radius note without writing result.json',
+  },
+  {
+    category: 'round',
+    code: 'missing_handoff',
+    pattern: /result\.json missing/i,
+    reason: 'Claude finished without producing result.json',
+  },
+]);
 
 let activeWebServer = null;
 let activeClaudeChild = null;
@@ -73,32 +133,55 @@ runLoopWithRecovery().catch((error) => {
 async function runLoopWithRecovery() {
   const restartOptions = parseOptions(parseArgs(process.argv.slice(2)));
   let recoverableFailures = 0;
+  let transientFailures = 0;
 
   while (true) {
     try {
       await main();
       return;
     } catch (error) {
+      const failureMessage = error instanceof Error ? error.message : String(error);
       if (!isRecoverableRoundFailure(error)) {
         throw error;
       }
-      recoverableFailures += 1;
-      if (recoverableFailures > MAX_RECOVERABLE_ROUND_FAILURES) {
-        throw new Error(`product loop exceeded ${MAX_RECOVERABLE_ROUND_FAILURES} recoverable round failures: ${error.message}`);
+
+      const failure = classifyRecoverableFailure(failureMessage);
+      const isTransientFailure = failure.category === 'protocol' || failure.category === 'upstream';
+      if (isTransientFailure) {
+        transientFailures += 1;
+      } else {
+        transientFailures = 0;
+        recoverableFailures += 1;
       }
 
-      const restartDelayMs = restartOptions.sleepMs;
+      if (!isTransientFailure && recoverableFailures > MAX_RECOVERABLE_ROUND_FAILURES) {
+        throw new Error(`product loop exceeded ${MAX_RECOVERABLE_ROUND_FAILURES} recoverable round failures: ${failureMessage}`);
+      }
+
+      const restartDelayMs = computeRecoveryDelayMs({
+        baseDelayMs: restartOptions.sleepMs,
+        failure,
+        recoverableFailures,
+        transientFailures,
+      });
       const nextRetryAt = new Date(Date.now() + restartDelayMs).toISOString();
       markLoopState({
         status: 'recovering',
         failedAt: nowIso(),
-        reason: error.message,
+        reason: failure.reason,
+        failureCategory: failure.category,
+        failureCode: failure.code,
         recoveryAttempts: recoverableFailures,
+        transientRecoveryAttempts: transientFailures,
         nextRetryAt,
         claudePid: null,
       });
-      console.error(`WARN: ${error.message}`);
-      console.log(`[${nowIso()}] restarting product loop in ${formatDurationMs(restartDelayMs)} (${recoverableFailures}/${MAX_RECOVERABLE_ROUND_FAILURES})`);
+      console.error(`WARN: ${failure.reason}`);
+      if (isTransientFailure) {
+        console.log(`[${nowIso()}] transient ${failure.category} failure; restarting product loop in ${formatDurationMs(restartDelayMs)} (transient streak ${transientFailures})`);
+      } else {
+        console.log(`[${nowIso()}] restarting product loop in ${formatDurationMs(restartDelayMs)} (${recoverableFailures}/${MAX_RECOVERABLE_ROUND_FAILURES})`);
+      }
       activeRun = null;
       await cleanupProcesses();
       await sleep(restartDelayMs);
@@ -132,7 +215,7 @@ async function main() {
   console.log(`- web surface: ${web.startedByScript ? 'started by loop' : 'reused existing server or skipped start'}`);
   console.log(`- max rounds: ${options.maxRounds === 0 ? 'unbounded' : options.maxRounds}`);
   console.log(`- iteration cycles per round: ${options.maxIterationCycles}`);
-  console.log(`- claude: settings=${options.settingSources} permission=${options.permissionMode} output=${options.outputFormat}`);
+  console.log(`- claude: model=${options.model} settings=${options.settingSources} permission=${options.permissionMode} output=${options.outputFormat} slash=${options.allowSlashCommands ? 'on' : 'off'}`);
   console.log(`- watchdog: heartbeat=${formatDurationMs(options.heartbeatMs)} idle=${formatDurationMs(options.idleTimeoutMs)} max=${formatDurationMs(options.maxRuntimeMs)}`);
 
   let rounds = 0;
@@ -158,6 +241,10 @@ async function main() {
 
     const execution = await executeRound(run, options);
     if (execution.exitCode !== 0) {
+      const failureReason = deriveRunFailureReason(
+        run,
+        execution.reason || execution.resultText || `claude exited ${execution.exitCode}`,
+      );
       stopStateHeartbeat();
       markLoopState({
         status: 'failed',
@@ -166,7 +253,7 @@ async function main() {
         runId: run.runId,
         baseUrl: options.baseUrl,
         failedAt: nowIso(),
-        reason: execution.reason || `claude exited ${execution.exitCode}`,
+        reason: failureReason,
         signal: execution.signal || null,
       });
       appendJsonl(LOOP_LEDGER_PATH, {
@@ -176,13 +263,24 @@ async function main() {
         status: 'failed',
         exitCode: execution.exitCode,
         signal: execution.signal,
-        reason: execution.reason,
+        reason: failureReason,
       });
-      throw new Error(`product round ${run.runId} failed: ${execution.reason || `claude exited ${execution.exitCode}`}`);
+      throw new Error(`product round ${run.runId} failed: ${failureReason}`);
     }
 
-    const handoff = readHandoff(run.resultPath);
+    let handoff = readHandoff(run.resultPath);
     if (!handoff.ok) {
+      const settled = settleMissingHandoff(run, execution, handoff.reason);
+      if (settled.settled) {
+        handoff = readHandoff(run.resultPath);
+      }
+    }
+
+    if (!handoff.ok) {
+      const failureReason = deriveRunFailureReason(
+        run,
+        execution.resultText || handoff.reason,
+      );
       stopStateHeartbeat();
       markLoopState({
         status: 'failed',
@@ -191,16 +289,16 @@ async function main() {
         runId: run.runId,
         baseUrl: options.baseUrl,
         failedAt: nowIso(),
-        reason: handoff.reason,
+        reason: failureReason,
       });
       appendJsonl(LOOP_LEDGER_PATH, {
         at: nowIso(),
         runId: run.runId,
         round: rounds,
         status: 'invalid_handoff',
-        reason: handoff.reason,
+        reason: failureReason,
       });
-      throw new Error(`product round ${run.runId} did not produce a valid result.json: ${handoff.reason}`);
+      throw new Error(`product round ${run.runId} did not produce a valid result.json: ${failureReason}`);
     }
 
     stopStateHeartbeat();
@@ -210,6 +308,7 @@ async function main() {
       round: rounds,
       status: handoff.value.disposition,
       summary: handoff.value.summary,
+      disposition: handoff.value.disposition,
       continueAutopilot: handoff.value.continueAutopilot,
       changedFiles: handoff.value.changedFiles,
       nextFocus: handoff.value.nextFocus,
@@ -223,6 +322,7 @@ async function main() {
       baseUrl: options.baseUrl,
       completedAt: nowIso(),
       summary: handoff.value.summary,
+      disposition: handoff.value.disposition,
       continueAutopilot: handoff.value.continueAutopilot,
       changedFiles: handoff.value.changedFiles,
       nextFocus: handoff.value.nextFocus,
@@ -278,11 +378,11 @@ function parseOptions(args) {
     outputFormat: args['claude-output-format'] || DEFAULTS.outputFormat,
     includePartialMessages: !Boolean(args['no-partial-messages']),
     allowConfiguredMcp: !Boolean(args['strict-mcp-config']),
-    allowSlashCommands: !Boolean(args['disable-slash-commands']),
+    allowSlashCommands: DEFAULTS.allowSlashCommands && !Boolean(args['disable-slash-commands']),
     allowSessionPersistence: Boolean(args['allow-session-persistence']),
     enableDebugFile: !Boolean(args['no-debug-file']),
     disableTelemetry: !Boolean(args['allow-telemetry']),
-    model: args.model || null,
+    model: args.model || DEFAULTS.model,
     baseUrl: args['base-url'] || DEFAULTS.baseUrl,
     ensureWeb: !Boolean(args['no-web-boot']),
     webBootTimeoutMs: parseNumber(args['web-boot-timeout-ms'], DEFAULTS.webBootTimeoutMs),
@@ -532,7 +632,7 @@ function buildPrompt({ runId, round, options, web, resultPath }) {
   const failureExample = {
     disposition: 'fail',
     summary: 'Blocked before a safe validated improvement could be completed.',
-    continueAutopilot: false,
+    continueAutopilot: true,
     reason: 'Exact blocker or failing command',
     iterations: [],
     changedFiles: [],
@@ -595,6 +695,7 @@ ${gitStatus || '- clean'}
 - If the round produced safe, validated progress, use \`disposition: "complete"\`.
 - If the round is blocked or validation fails, use \`disposition: "fail"\` and include a precise \`reason\`.
 - Set \`continueAutopilot\` to \`true\` only when another unattended round should keep iterating safely.
+- A failed round can still keep \`continueAutopilot: true\` when the safest next step is an unattended retry rather than stopping the whole loop.
 - Include \`areasImproved\`, \`areasStillWeak\`, and \`decisionReason\` so future rounds can use your result as planning memory.
 - If you re-touch any file from the recent cooldown list, include \`revisitJustification\` with the concrete new evidence or unfinished gap.
 - Missing or invalid \`result.json\` is treated as a failed autopilot round.
@@ -649,6 +750,7 @@ async function executeRound(run, options) {
   let successfulHandoffSeen = false;
   let gracefulShutdownRequested = false;
   let postResultWatcher = null;
+  let lastResultText = null;
   const backgroundTasks = new Map();
   let stalledBackgroundTask = null;
   const stalledTaskGraceMs = Math.min(5 * 60_000, Math.max(10_000, Math.floor(options.idleTimeoutMs / 6)));
@@ -817,6 +919,7 @@ async function executeRound(run, options) {
     try {
       const payload = JSON.parse(trimmed);
       if (payload.type === 'result' && payload.subtype === 'success' && payload.is_error === false) {
+        lastResultText = typeof payload.result === 'string' ? payload.result : null;
         successfulResultSeen = true;
         resultEventAt = nowIso();
         markLoopState({
@@ -824,6 +927,8 @@ async function executeRound(run, options) {
           resultDetectedAt: resultEventAt,
         });
         startPostResultWatcher();
+      } else if (payload.type === 'result' && typeof payload.result === 'string') {
+        lastResultText = payload.result;
       }
       if (payload.type === 'system' && payload.subtype === 'task_started') {
         rememberBackgroundTaskStart({
@@ -966,6 +1071,7 @@ async function executeRound(run, options) {
         exitCode: treatAsSuccess ? 0 : code ?? (signal ? 1 : 0),
         signal: treatAsSuccess ? null : forcedSignal || signal,
         reason: treatAsSuccess ? null : postResultReason || watchdogReason,
+        resultText: lastResultText,
       });
     });
   });
@@ -1013,13 +1119,283 @@ function buildClaudeEnv(options) {
   return env;
 }
 
+function deriveRunFailureReason(run, fallbackReason) {
+  const rawCandidates = [
+    readFileTail(run.logPath, 16_000),
+    readFileTail(run.debugPath, 16_000),
+    fallbackReason,
+  ].filter(Boolean);
+
+  for (const candidate of rawCandidates) {
+    const signature = matchFailureSignature(candidate);
+    if (signature) {
+      return signature.reason;
+    }
+  }
+
+  const normalizedFallback = normalizeFailureSnippet(fallbackReason || 'unknown Claude failure');
+  if (normalizedFallback && normalizedFallback !== 'result.json missing') {
+    return normalizedFallback;
+  }
+
+  return 'Claude finished without producing result.json';
+}
+
+function settleMissingHandoff(run, execution, invalidReason) {
+  const failureReason = deriveRunFailureReason(
+    run,
+    execution.resultText || invalidReason,
+  );
+  const backupPath = backupInvalidHandoff(run.resultPath);
+  const payload = buildSyntheticMissingHandoff(run, failureReason, backupPath);
+
+  fs.writeFileSync(run.resultPath, `${JSON.stringify(payload, null, 2)}\n`);
+  appendAutoSettleLog(run.logPath, [
+    '[auto-settle] wrote synthetic result.json after missing/invalid handoff',
+    `[auto-settle] reason: ${failureReason}`,
+    backupPath ? `[auto-settle] invalid handoff backup: ${backupPath}` : null,
+  ].filter(Boolean));
+
+  markLoopState({
+    runStatus: 'auto_settled_handoff',
+    autoSettledAt: nowIso(),
+    autoSettledReason: failureReason,
+  });
+
+  return {
+    settled: true,
+    reason: failureReason,
+    backupPath,
+  };
+}
+
+function backupInvalidHandoff(resultPath) {
+  if (!fs.existsSync(resultPath)) {
+    return null;
+  }
+
+  const backupPath = path.join(path.dirname(resultPath), 'result.invalid.json');
+  fs.copyFileSync(resultPath, backupPath);
+  return backupPath;
+}
+
+function buildSyntheticMissingHandoff(run, failureReason, backupPath) {
+  return {
+    disposition: 'fail',
+    summary: 'Harness auto-settled a missing result.json so unattended iteration can continue safely.',
+    reason: failureReason,
+    continueAutopilot: true,
+    systemHealth: 'degraded',
+    automationAdjusted: true,
+    iterations: [],
+    changedFiles: [],
+    areasImproved: [
+      'Harness converted a premature end-turn into a durable result.json handoff.',
+    ],
+    areasStillWeak: [
+      'Claude can still exit after a planning or status note instead of writing result.json.',
+    ],
+    decisionReason: 'Preserve unattended loop continuity and durable round memory after a premature child exit.',
+    revisitJustification: null,
+    validations: [
+      {
+        command: 'synthetic handoff settlement',
+        status: 'passed',
+        note: backupPath
+          ? `Backed up the invalid handoff to ${backupPath} and wrote a fallback result.json.`
+          : 'No valid handoff existed, so the harness wrote a fallback result.json.',
+      },
+    ],
+    remainingOpportunities: [
+      'Retry the interrupted product investigation in a fresh round and produce a native result.json.',
+    ],
+    nextFocus: 'Resume the interrupted product investigation and complete the next round with a native result.json.',
+    autoSettled: true,
+    autoSettledFromRun: run.runId,
+  };
+}
+
+function appendAutoSettleLog(logPath, lines) {
+  if (!logPath || !Array.isArray(lines) || !lines.length) {
+    return;
+  }
+  fs.appendFileSync(logPath, `${lines.join('\n')}\n`);
+}
+
+function readFileTail(filePath, byteLimit = 12_000) {
+  if (!filePath || !fs.existsSync(filePath)) {
+    return null;
+  }
+
+  const stats = fs.statSync(filePath);
+  const start = Math.max(0, stats.size - byteLimit);
+  const fd = fs.openSync(filePath, 'r');
+
+  try {
+    const buffer = Buffer.alloc(stats.size - start);
+    fs.readSync(fd, buffer, 0, buffer.length, start);
+    return buffer.toString('utf8');
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+function normalizeFailureSnippet(text) {
+  return String(text || '')
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 280);
+}
+
+function matchFailureSignature(text) {
+  const normalizedText = normalizeFailureSnippet(text);
+  if (!normalizedText) {
+    return null;
+  }
+
+  for (const signature of FAILURE_SIGNATURES) {
+    if (signature.pattern.test(normalizedText)) {
+      return signature;
+    }
+  }
+
+  return null;
+}
+
+function classifyRecoverableFailure(message) {
+  const signature = matchFailureSignature(message);
+  if (signature) {
+    return signature;
+  }
+
+  return {
+    category: 'round',
+    code: 'generic',
+    reason: normalizeFailureSnippet(message),
+  };
+}
+
+function computeRecoveryDelayMs({ baseDelayMs, failure, recoverableFailures, transientFailures }) {
+  if (failure.category === 'protocol' || failure.category === 'upstream') {
+    const transientDelayMs = Math.max(
+      baseDelayMs,
+      Math.min(
+        MAX_TRANSIENT_RECOVERY_DELAY_MS,
+        TRANSIENT_RECOVERY_STEP_MS * Math.max(1, transientFailures),
+      ),
+    );
+    return transientDelayMs;
+  }
+
+  return Math.max(
+    baseDelayMs,
+    Math.min(
+      MAX_TRANSIENT_RECOVERY_DELAY_MS,
+      baseDelayMs + (Math.max(0, recoverableFailures - 1) * ROUND_FAILURE_BACKOFF_STEP_MS),
+    ),
+  );
+}
+
+function parseJsonWithRepair(rawText) {
+  try {
+    return {
+      value: JSON.parse(rawText),
+      repaired: false,
+    };
+  } catch (error) {
+    const repairedText = repairJsonText(rawText);
+    if (repairedText === rawText) {
+      throw error;
+    }
+    return {
+      value: JSON.parse(repairedText),
+      repaired: true,
+    };
+  }
+}
+
+function repairJsonText(rawText) {
+  let repaired = '';
+  let inString = false;
+  let escaping = false;
+  let changed = false;
+
+  for (let index = 0; index < rawText.length; index += 1) {
+    const char = rawText[index];
+    const code = rawText.charCodeAt(index);
+
+    if (!inString) {
+      repaired += char;
+      if (char === '"') {
+        inString = true;
+      }
+      continue;
+    }
+
+    if (escaping) {
+      if ('"\\/bfnrtu'.includes(char)) {
+        repaired += `\\${char}`;
+      } else {
+        repaired += char;
+        changed = true;
+      }
+      escaping = false;
+      continue;
+    }
+
+    if (char === '\\') {
+      escaping = true;
+      continue;
+    }
+
+    if (char === '"') {
+      repaired += char;
+      inString = false;
+      continue;
+    }
+
+    if (code <= 0x1f) {
+      repaired += escapeJsonControlCharacter(code);
+      changed = true;
+      continue;
+    }
+
+    repaired += char;
+  }
+
+  if (escaping) {
+    repaired += '\\\\';
+    changed = true;
+  }
+
+  return changed ? repaired : rawText;
+}
+
+function escapeJsonControlCharacter(code) {
+  switch (code) {
+    case 0x08:
+      return '\\b';
+    case 0x09:
+      return '\\t';
+    case 0x0a:
+      return '\\n';
+    case 0x0c:
+      return '\\f';
+    case 0x0d:
+      return '\\r';
+    default:
+      return `\\u${code.toString(16).padStart(4, '0')}`;
+  }
+}
+
 function readHandoff(resultPath) {
   if (!fs.existsSync(resultPath)) {
     return { ok: false, reason: 'result.json missing' };
   }
 
   try {
-    const payload = JSON.parse(fs.readFileSync(resultPath, 'utf8'));
+    const { value: payload, repaired } = parseJsonWithRepair(fs.readFileSync(resultPath, 'utf8'));
     if (!payload || typeof payload !== 'object') {
       return { ok: false, reason: 'result.json is not an object' };
     }
@@ -1050,6 +1426,7 @@ function readHandoff(resultPath) {
     return {
       ok: true,
       value: normalized,
+      repaired,
     };
   } catch (error) {
     return { ok: false, reason: error.message };
@@ -1102,7 +1479,7 @@ function loadProductRoundResults(limit = MEMORY_DEFAULTS.historyLimit, options =
         return null;
       }
       try {
-        const payload = JSON.parse(fs.readFileSync(resultPath, 'utf8'));
+        const { value: payload } = parseJsonWithRepair(fs.readFileSync(resultPath, 'utf8'));
         return normalizeRoundResult({
           runId: entry,
           payload,
@@ -1135,7 +1512,7 @@ function normalizeRoundResult({ runId, payload, mtimeMs }) {
     disposition: payload.disposition,
     summary,
     reason: normalizeOptionalText(payload.reason),
-    continueAutopilot: payload.disposition === 'fail' ? false : payload.continueAutopilot,
+    continueAutopilot: payload.continueAutopilot,
     changedFiles,
     validations: Array.isArray(payload.validations) ? payload.validations : [],
     iterations: Array.isArray(payload.iterations) ? payload.iterations : [],
@@ -1482,8 +1859,95 @@ function sendSignalToChild(child, signal, processGroup = false) {
   }
 }
 
+const LOOP_STATE_RESETS_BY_STATUS = Object.freeze({
+  running: {
+    completedAt: null,
+    stoppedAt: null,
+    failedAt: null,
+    reason: null,
+    signal: null,
+    summary: null,
+    disposition: null,
+    continueAutopilot: null,
+    changedFiles: null,
+    nextFocus: null,
+    failureCategory: null,
+    failureCode: null,
+    recoveryAttempts: null,
+    transientRecoveryAttempts: null,
+    nextRetryAt: null,
+    autoSettledAt: null,
+    autoSettledReason: null,
+    claudeExitedAt: null,
+    resultDetectedAt: null,
+    stalledTaskId: null,
+    stalledTaskDescription: null,
+    stalledTaskObservedAt: null,
+    runStatus: null,
+  },
+  round_completed: {
+    failedAt: null,
+    reason: null,
+    signal: null,
+    failureCategory: null,
+    failureCode: null,
+    recoveryAttempts: null,
+    transientRecoveryAttempts: null,
+    nextRetryAt: null,
+    stoppedAt: null,
+    stalledTaskId: null,
+    stalledTaskDescription: null,
+    stalledTaskObservedAt: null,
+    runStatus: null,
+  },
+  failed: {
+    completedAt: null,
+    summary: null,
+    disposition: null,
+    continueAutopilot: null,
+    changedFiles: null,
+    nextFocus: null,
+    stoppedAt: null,
+    runStatus: null,
+  },
+  recovering: {
+    completedAt: null,
+    summary: null,
+    disposition: null,
+    continueAutopilot: null,
+    changedFiles: null,
+    nextFocus: null,
+    stoppedAt: null,
+    runStatus: null,
+    resultDetectedAt: null,
+    claudeExitedAt: null,
+    autoSettledAt: null,
+    autoSettledReason: null,
+    stalledTaskId: null,
+    stalledTaskDescription: null,
+    stalledTaskObservedAt: null,
+  },
+  stopped: {
+    claudeStartedAt: null,
+    claudeExitedAt: null,
+    resultDetectedAt: null,
+    stalledTaskId: null,
+    stalledTaskDescription: null,
+    stalledTaskObservedAt: null,
+    runStatus: null,
+  },
+  terminated: {
+    resultDetectedAt: null,
+    stalledTaskId: null,
+    stalledTaskDescription: null,
+    stalledTaskObservedAt: null,
+  },
+});
+
 function markLoopState(patch) {
+  const stateReset = patch.status ? LOOP_STATE_RESETS_BY_STATUS[patch.status] || null : null;
   const stampedPatch = {
+    ...(stateReset || {}),
     ...patch,
     pid: process.pid,
     ppid: process.ppid,
@@ -1704,7 +2168,7 @@ Usage:
 
 Options:
   --owner NAME                    Run owner label. Default: ${DEFAULTS.owner}
-  --model MODEL                   Claude model override.
+  --model MODEL                   Claude model override. Default: ${DEFAULTS.model}
   --base-url URL                  Product base URL to exercise. Default: ${DEFAULTS.baseUrl}
   --no-web-boot                   Do not auto-start the web surface if the URL is down.
   --max-rounds N                  Maximum autopilot rounds. 0 means unbounded.

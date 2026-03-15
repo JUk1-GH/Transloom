@@ -4,7 +4,7 @@
   "private": true,
   "main": "dist-electron/electron/main.js",
   "scripts": {
-    "dev:web": "next dev --webpack --hostname 127.0.0.1 --port 3003",
+    "dev:web": "cross-env TRANSLOOM_LOCAL_OCR_RESOURCE_DIR=tools/local-ocr next dev --webpack --hostname 127.0.0.1 --port 3003",
     "dev": "npm run dev:web",
     "dev:desktop": "concurrently -k \"npm:dev:web\" \"npm:electron:watch\" \"npm:electron:dev\"",
     "electron:dev": "wait-on tcp:3003 dist-electron/electron/main.js && cross-env NODE_ENV=development TRANSLOOM_WEB_PORT=3003 ELECTRON_START_URL=http://127.0.0.1:3003 electron .",
@@ -13,10 +13,10 @@
     "build": "npm run build:web",
     "build:electron": "tsc -p electron/tsconfig.json",
     "build:desktop": "npm run build && npm run build:electron",
-    "package:desktop": "npm run build:desktop && electron-builder --mac dmg dir --publish never",
+    "package:desktop": "rm -rf release/mac-arm64 && npm run build:desktop && electron-builder --mac dmg dir --publish never",
     "ocr:local:setup": "sh scripts/local-ocr-setup.sh",
     "ocr:local:start": "sh scripts/local-ocr-start.sh",
-    "start:web": "next start --hostname 127.0.0.1 --port 3003",
+    "start:web": "cross-env TRANSLOOM_LOCAL_OCR_RESOURCE_DIR=tools/local-ocr next start --hostname 127.0.0.1 --port 3003",
     "start": "npm run start:web",
     "start:desktop": "concurrently -k \"npm:start:web\" \"npm:electron:start\"",
     "electron:start": "wait-on tcp:3003 dist-electron/electron/main.js && cross-env NODE_ENV=production TRANSLOOM_WEB_PORT=3003 ELECTRON_START_URL=http://127.0.0.1:3003 electron .",
@@ -99,11 +99,19 @@
         "from": "public",
         "to": "app-dist/.next/standalone/public"
       },
-      {
-        "from": "prisma/transloom.db",
-        "to": "app-dist/prisma/transloom.db"
-      }
-    ],
+    {
+      "from": "prisma/transloom.db",
+      "to": "app-dist/prisma/transloom.db"
+    },
+    {
+      "from": "tools/local-ocr",
+      "to": "app-dist/tools/local-ocr",
+      "filter": [
+        "**/*",
+        "!__pycache__/**/*"
+      ]
+    }
+  ],
     "mac": {
       "category": "public.app-category.productivity",
       "target": [

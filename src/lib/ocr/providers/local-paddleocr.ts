@@ -1,6 +1,6 @@
 import type { OcrResult } from '@/domain/ocr/types';
 import { estimateBackgroundColor } from '@/lib/image/background-color';
-import { normalizeLocalOcrEndpoint } from '@/lib/ocr/local-ocr-config';
+import { runEmbeddedLocalOcr } from '@/lib/ocr/providers/embedded-local-ocr';
 
 type LocalOcrProviderId = 'local-paddleocr' | 'rapidocr' | 'apple-vision';
 type LocalOcrServiceEngine = 'paddleocr' | 'rapidocr' | 'apple-vision';
@@ -78,32 +78,16 @@ function normalizeLocalOcrResult(
 async function runLocalOcr(
   imagePath: string,
   options: {
-    endpoint?: string;
     engine: LocalOcrServiceEngine;
     provider: LocalOcrProviderId;
     displayName: string;
   },
 ) {
-  const endpoint = normalizeLocalOcrEndpoint(options?.endpoint);
-
   try {
-    const response = await fetch(endpoint, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        image_path: imagePath,
-        engine: options.engine,
-      }),
+    const payload = await runEmbeddedLocalOcr<unknown>({
+      imagePath,
+      engine: options.engine,
     });
-    const payload = await response.json().catch(() => null);
-
-    if (!response.ok) {
-      const detail = payload && typeof payload === 'object' && 'detail' in payload ? payload.detail : null;
-      const message = typeof detail === 'string'
-        ? detail
-        : `${options.displayName} 服务返回 ${response.status}。`;
-      throw createLocalOcrError('LOCAL_OCR_HTTP_ERROR', message, response.status);
-    }
 
     return normalizeLocalOcrResult(
       payload,
@@ -116,15 +100,14 @@ async function runLocalOcr(
     }
 
     throw createLocalOcrError(
-      'LOCAL_OCR_NETWORK_ERROR',
-      `无法连接 ${options.displayName} 服务（${endpoint}）。请先运行 npm run ocr:local:start。`,
+      'LOCAL_OCR_EMBEDDED_ERROR',
+      `${options.displayName} 当前不可用。应用会自动管理本地 OCR 引擎；如果首次启动失败，请稍后重试。`,
     );
   }
 }
 
 export async function runLocalPaddleOcr(imagePath: string, options?: { endpoint?: string }) {
   return runLocalOcr(imagePath, {
-    endpoint: options?.endpoint,
     engine: 'paddleocr',
     provider: 'local-paddleocr',
     displayName: '本地 PaddleOCR',
@@ -133,7 +116,6 @@ export async function runLocalPaddleOcr(imagePath: string, options?: { endpoint?
 
 export async function runRapidOcr(imagePath: string, options?: { endpoint?: string }) {
   return runLocalOcr(imagePath, {
-    endpoint: options?.endpoint,
     engine: 'rapidocr',
     provider: 'rapidocr',
     displayName: 'RapidOCR',
@@ -142,7 +124,6 @@ export async function runRapidOcr(imagePath: string, options?: { endpoint?: stri
 
 export async function runAppleVisionOcr(imagePath: string, options?: { endpoint?: string }) {
   return runLocalOcr(imagePath, {
-    endpoint: options?.endpoint,
     engine: 'apple-vision',
     provider: 'apple-vision',
     displayName: 'Apple Vision Framework',

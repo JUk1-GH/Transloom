@@ -352,7 +352,7 @@ export default async function HistoryPage({
                 href={href}
                 className={
                   active
-                    ? 'inline-flex h-9 items-center gap-2 rounded-[11px] bg-[#242529] px-4 text-[14px] font-medium text-white'
+                    ? 'inline-flex h-9 items-center gap-2 rounded-[11px] bg-[#242529] px-4 text-[14px] font-medium !text-white shadow-[0_1px_2px_rgba(0,0,0,0.08)] [&_*]:!text-white'
                     : 'inline-flex h-9 items-center gap-2 rounded-[11px] px-3 text-[14px] font-medium text-[#4c525d] transition hover:bg-[#f3f4f6] hover:text-[#22262d]'
                 }
               >

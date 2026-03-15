@@ -34,6 +34,7 @@ const HARNESS_DEFAULT_SETTINGS: SecureSettingsData = {
   },
   defaultTargetLang: 'zh-CN',
   shortcut: 'CommandOrControl+Shift+2',
+  translationTriggerMode: 'manual',
 };
 const HARNESS_PORT = (() => {
   const value = Number(process.env.TRANSLOOM_HARNESS_PORT ?? '37731');
@@ -60,6 +61,7 @@ function cloneHarnessSettings(): SecureSettingsData {
     provider: { ...HARNESS_DEFAULT_SETTINGS.provider },
     defaultTargetLang: HARNESS_DEFAULT_SETTINGS.defaultTargetLang,
     shortcut: HARNESS_DEFAULT_SETTINGS.shortcut,
+    translationTriggerMode: HARNESS_DEFAULT_SETTINGS.translationTriggerMode,
   };
 }
 
@@ -186,6 +188,7 @@ async function getRendererUrl() {
   const appDistRoot = path.join(process.resourcesPath, 'app-dist');
   const serverScript = path.join(appDistRoot, '.next', 'standalone', 'server.js');
   const serverUrl = `http://127.0.0.1:${PROD_PORT}`;
+  const localOcrResourceDir = path.join(appDistRoot, 'tools', 'local-ocr');
 
   if (!rendererServer) {
     rendererServer = spawn(process.execPath, [serverScript], {
@@ -197,6 +200,7 @@ async function getRendererUrl() {
         HOSTNAME: '127.0.0.1',
         NODE_ENV: 'production',
         TRANSLOOM_DATA_DIR: app.getPath('userData'),
+        TRANSLOOM_LOCAL_OCR_RESOURCE_DIR: localOcrResourceDir,
       },
       stdio: 'ignore',
     });
@@ -233,6 +237,7 @@ async function getDesktopSettings() {
       shortcut: harnessSettings.shortcut,
       desktopMode: true,
       defaultTargetLang: harnessSettings.defaultTargetLang,
+      translationTriggerMode: harnessSettings.translationTriggerMode,
       runtimeMode: runtimeSnapshot.runtimeMode,
       provider: buildProviderSummary(harnessSettings.provider),
     };
@@ -246,6 +251,7 @@ async function getDesktopSettings() {
     shortcut: currentShortcut,
     desktopMode: true,
     defaultTargetLang: settings.defaultTargetLang,
+    translationTriggerMode: settings.translationTriggerMode,
     runtimeMode: runtimeSnapshot.runtimeMode,
     provider: buildProviderSummary(settings.provider),
   };
@@ -277,6 +283,7 @@ function getHarnessProviderSecret() {
 function applyHarnessSettings(payload: {
   shortcut?: string;
   defaultTargetLang?: string;
+  translationTriggerMode?: SecureSettingsData['translationTriggerMode'];
   provider?: {
     kind?: SecureSettingsData['provider']['kind'];
     baseUrl?: string;
@@ -307,6 +314,7 @@ function applyHarnessSettings(payload: {
     },
     defaultTargetLang: payload.defaultTargetLang?.trim() || harnessSettings.defaultTargetLang || HARNESS_DEFAULT_SETTINGS.defaultTargetLang,
     shortcut: payload.shortcut?.trim() || harnessSettings.shortcut || HARNESS_DEFAULT_SETTINGS.shortcut,
+    translationTriggerMode: payload.translationTriggerMode === 'auto' ? 'auto' : harnessSettings.translationTriggerMode || HARNESS_DEFAULT_SETTINGS.translationTriggerMode,
   };
   currentShortcut = harnessSettings.shortcut;
   return harnessSettings;
@@ -745,6 +753,7 @@ app.whenReady().then(async () => {
         payload: {
           shortcut?: string;
           defaultTargetLang?: string;
+          translationTriggerMode?: SecureSettingsData['translationTriggerMode'];
           provider?: {
             kind?: SecureSettingsData['provider']['kind'];
             baseUrl?: string;
@@ -764,6 +773,7 @@ app.whenReady().then(async () => {
             shortcut: saved.shortcut,
             desktopMode: true,
             defaultTargetLang: saved.defaultTargetLang,
+            translationTriggerMode: saved.translationTriggerMode,
             runtimeMode: runtimeSnapshot.runtimeMode,
             provider: buildProviderSummary(saved.provider),
           };
@@ -781,6 +791,7 @@ app.whenReady().then(async () => {
           shortcut: saved.shortcut,
           desktopMode: true,
           defaultTargetLang: saved.defaultTargetLang,
+          translationTriggerMode: saved.translationTriggerMode,
           runtimeMode: runtimeSnapshot.runtimeMode,
           provider: buildProviderSummary(saved.provider),
         };

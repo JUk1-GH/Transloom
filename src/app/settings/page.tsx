@@ -18,10 +18,12 @@ import {
 
 type ProviderPreset = 'deepseek' | 'openai' | 'tencent' | 'custom';
 type SettingsSection = 'providers' | 'general' | 'ocr';
+type TranslationTriggerMode = 'manual' | 'auto';
 
 type SettingsState = {
   shortcut: string;
   defaultTargetLang: string;
+  translationTriggerMode: TranslationTriggerMode;
   runtimeMode: 'real' | 'mock';
   runtimeStatus?: 'ready' | 'provider-missing' | 'model-missing' | 'api-key-missing' | 'mock-fallback';
   providerPreset: ProviderPreset;
@@ -44,6 +46,7 @@ type SettingsState = {
 const defaultSettings: SettingsState = {
   shortcut: 'CommandOrControl+Shift+2',
   defaultTargetLang: 'zh-CN',
+  translationTriggerMode: 'manual',
   runtimeMode: 'mock',
   providerPreset: 'deepseek',
   provider: {
@@ -71,10 +74,10 @@ const targetLanguageOptions = [
 ] as const;
 
 const screenshotOcrOptions: Array<{ value: ScreenshotOcrEngine; label: string; helper: string; badge: string }> = [
-  { value: 'cloud-vision', label: '云端视觉', helper: '直接复用当前翻译服务处理截图 OCR，适合已有视觉模型的场景。', badge: '最省事' },
-  { value: 'local-paddleocr', label: 'PaddleOCR 本地', helper: '稳定、免费、完全本地，适合大多数截图翻译用户。', badge: '推荐' },
-  { value: 'rapidocr', label: 'RapidOCR', helper: '轻量快速，启动更干脆，适合追求响应速度的本地使用。', badge: '轻量' },
-  { value: 'apple-vision', label: 'Apple Vision Framework', helper: '走 macOS 原生 Vision，适合 Apple 设备上的纯本地 OCR。', badge: '原生' },
+  { value: 'cloud-vision', label: '云端视觉', helper: '会复用你当前的翻译服务做截图 OCR，前提是对方支持图片输入。', badge: '需要云端支持' },
+  { value: 'local-paddleocr', label: 'PaddleOCR 本地', helper: '精度最高，适合复杂界面和中文混排；首次启动通常会更慢一些。', badge: '推荐（精度高，速度偏慢）' },
+  { value: 'rapidocr', label: 'RapidOCR', helper: '整体更轻更快，适合日常截图识别，精度和速度比较均衡。', badge: '轻量（精度中高，速度较快）' },
+  { value: 'apple-vision', label: 'Apple Vision Framework', helper: '调用 macOS 原生 Vision，引擎更贴近系统，启动快、体验更轻。', badge: '原生（精度中等，速度较快）' },
 ] as const;
 
 const providerPresetOptions: Array<{
@@ -131,11 +134,15 @@ const providerPresetOptions: Array<{
 
 const sectionItems: Array<{ id: SettingsSection; label: string; description: string }> = [
   { id: 'providers', label: '翻译服务', description: '服务与凭证' },
-  { id: 'general', label: '常用偏好', description: '语言与快捷键' },
+  { id: 'general', label: '通用设置', description: '语言、翻译与快捷键' },
   { id: 'ocr', label: '截图识别', description: 'OCR 方案' },
 ] as const;
 
 const shortcutSuggestions = ['CommandOrControl+Shift+2', 'CommandOrControl+Shift+E', 'CommandOrControl+Option+T'] as const;
+const translationTriggerOptions: Array<{ value: TranslationTriggerMode; label: string; helper: string }> = [
+  { value: 'manual', label: '手动翻译', helper: '只有点翻译按钮时才发送请求，适合慢慢改文案。' },
+  { value: 'auto', label: '边输入边翻译', helper: '输入停顿后自动翻译，适合连续试句子和改措辞。' },
+] as const;
 
 const selectClassName =
   'h-10 w-full rounded-[12px] border border-[#d7dbe2] bg-white px-3 text-sm text-[#111111] outline-none transition focus:border-[#1ca36f] focus:ring-3 focus:ring-[#d9f7ea]';
@@ -324,6 +331,18 @@ function getRuntimeTone(runtimeStatus: SettingsState['runtimeStatus'], runtimeMo
   };
 }
 
+function getRuntimeBadgeTone(runtimeStatus: SettingsState['runtimeStatus'], runtimeMode: SettingsState['runtimeMode']) {
+  if (runtimeStatus === 'ready' || (!runtimeStatus && runtimeMode === 'real')) {
+    return 'success' as const;
+  }
+
+  if (runtimeStatus === 'provider-missing' || runtimeStatus === 'api-key-missing' || runtimeStatus === 'model-missing') {
+    return 'warning' as const;
+  }
+
+  return 'neutral' as const;
+}
+
 function getProviderPreset(providerKind?: string | null, baseUrl?: string | null): ProviderPreset {
   if (providerKind === 'tencent') {
     return 'tencent';
@@ -437,14 +456,18 @@ function getProviderActionHint(settings: SettingsState) {
 function getOcrSummary(engine: ScreenshotOcrEngine) {
   switch (engine) {
     case 'cloud-vision':
-      return '截图 OCR 会直接走当前翻译服务';
+      return '当前截图识别会直接复用已生效的翻译服务';
     case 'local-paddleocr':
-      return '截图 OCR 会走本地 PaddleOCR 服务';
+      return '当前截图识别使用内置 PaddleOCR 引擎';
     case 'rapidocr':
-      return '截图 OCR 会走本地 RapidOCR';
+      return '当前截图识别使用内置 RapidOCR 引擎';
     case 'apple-vision':
-      return '截图 OCR 会走 Apple Vision Framework';
+      return '当前截图识别使用 Apple Vision Framework';
   }
+}
+
+function getOcrTone(engine: ScreenshotOcrEngine) {
+  return engine === 'cloud-vision' ? 'neutral' : 'success';
 }
 
 function getOcrCompatibilityMessage(settings: SettingsState, ocrEngine: ScreenshotOcrEngine, endpoint: string) {
@@ -460,7 +483,7 @@ function getOcrCompatibilityMessage(settings: SettingsState, ocrEngine: Screensh
     return '截图 OCR 会复用当前翻译服务。只要当前模型支持图片输入，就能直接使用。';
   }
 
-  return `当前会通过本地 OCR 端点 ${endpoint} 处理截图识别，翻译结果再交给你当前选中的翻译服务。`;
+  return '本地 OCR 已经内置在应用里。首次使用时会自动准备并拉起，不需要再开本地 Web 服务，也不需要操心端口。';
 }
 
 function getSectionTip(activeSection: SettingsSection) {
@@ -595,6 +618,7 @@ function Keycap({ value }: { value: string }) {
 
 export default function SettingsPage() {
   const [settings, setSettings] = useState<SettingsState>(defaultSettings);
+  const [appliedSettings, setAppliedSettings] = useState<SettingsState>(defaultSettings);
   const [activeSection, setActiveSection] = useState<SettingsSection>('providers');
   const [statusMessage, setStatusMessage] = useState('正在同步服务摘要...');
   const [connectionMessage, setConnectionMessage] = useState(
@@ -604,9 +628,11 @@ export default function SettingsPage() {
   );
   const [isHydrating, setIsHydrating] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
+  const [isSavingOcr, setIsSavingOcr] = useState(false);
   const [isTesting, setIsTesting] = useState(false);
   const [showApiKey, setShowApiKey] = useState(false);
   const [captureOcrEngine, setCaptureOcrEngine] = useState<ScreenshotOcrEngine>('cloud-vision');
+  const [appliedCaptureOcrEngine, setAppliedCaptureOcrEngine] = useState<ScreenshotOcrEngine>('cloud-vision');
   const [captureLocalOcrEndpoint, setCaptureLocalOcrEndpoint] = useState(DEFAULT_LOCAL_OCR_ENDPOINT);
   const [captureOcrReady, setCaptureOcrReady] = useState(false);
   const [viewportHeight, setViewportHeight] = useState<number | null>(null);
@@ -621,6 +647,7 @@ export default function SettingsPage() {
     const savedEngine = window.localStorage.getItem(OCR_ENGINE_STORAGE_KEY);
     if (savedEngine === 'cloud-vision' || savedEngine === 'local-paddleocr' || savedEngine === 'rapidocr' || savedEngine === 'apple-vision') {
       setCaptureOcrEngine(savedEngine);
+      setAppliedCaptureOcrEngine(savedEngine);
     }
 
     const savedEndpoint = window.localStorage.getItem(OCR_ENDPOINT_STORAGE_KEY);
@@ -642,15 +669,6 @@ export default function SettingsPage() {
     window.addEventListener('resize', syncViewportHeight);
     return () => window.removeEventListener('resize', syncViewportHeight);
   }, []);
-
-  useEffect(() => {
-    if (typeof window === 'undefined' || !captureOcrReady) {
-      return;
-    }
-
-    window.localStorage.setItem(OCR_ENGINE_STORAGE_KEY, captureOcrEngine);
-    window.localStorage.setItem(OCR_ENDPOINT_STORAGE_KEY, normalizedCaptureLocalOcrEndpoint);
-  }, [captureOcrEngine, captureOcrReady, normalizedCaptureLocalOcrEndpoint]);
 
   useEffect(() => {
     async function bootstrap() {
@@ -691,6 +709,27 @@ export default function SettingsPage() {
               projectId: runtime?.provider?.projectId ?? current.provider.projectId,
             },
           }));
+          setAppliedSettings((current) => ({
+            ...current,
+            runtimeMode: runtime?.runtimeMode === 'real' ? 'real' : 'mock',
+            runtimeStatus,
+            providerPreset: getProviderPreset(providerKind, providerBaseUrl),
+            provider: {
+              ...current.provider,
+              kind: providerKind,
+              baseUrl: providerBaseUrl,
+              model: providerModel,
+              apiKey: '',
+              apiKeyMasked: enabledProvider?.apiKeyMasked,
+              hasApiKey: providerHasApiKey,
+              secretId: '',
+              secretKey: '',
+              secretKeyMasked: undefined,
+              hasSecretKey: providerKind === 'tencent' ? providerHasApiKey : false,
+              region: runtime?.provider?.region ?? current.provider.region,
+              projectId: runtime?.provider?.projectId ?? current.provider.projectId,
+            },
+          }));
           setStatusMessage(getBrowserPreviewStatusMessage(runtimeStatus));
           setConnectionMessage(getBrowserPreviewConnectionMessage(runtimeStatus));
           setIsHydrating(false);
@@ -706,6 +745,7 @@ export default function SettingsPage() {
         const nextState: SettingsState = {
           shortcut: saved.shortcut,
           defaultTargetLang: saved.defaultTargetLang,
+          translationTriggerMode: saved.translationTriggerMode === 'auto' ? 'auto' : 'manual',
           runtimeMode: runtime.runtimeMode,
           runtimeStatus: runtime.status,
           providerPreset: getProviderPreset(saved.provider.kind, saved.provider.baseUrl),
@@ -726,6 +766,7 @@ export default function SettingsPage() {
         };
 
         setSettings(nextState);
+        setAppliedSettings(nextState);
         setStatusMessage(
           runtime.status === 'ready'
             ? '服务已就绪，桌面应用现在可以使用真实端点。'
@@ -756,13 +797,86 @@ export default function SettingsPage() {
     () => screenshotOcrOptions.find((option) => option.value === captureOcrEngine) ?? screenshotOcrOptions[0],
     [captureOcrEngine],
   );
+  const appliedOcrOption = useMemo(
+    () => screenshotOcrOptions.find((option) => option.value === appliedCaptureOcrEngine) ?? screenshotOcrOptions[0],
+    [appliedCaptureOcrEngine],
+  );
   const isTencentProvider = settings.provider.kind === 'tencent';
   const isLocalProvider = !isTencentProvider && (settings.provider.baseUrl.includes('localhost') || settings.provider.baseUrl.includes('127.0.0.1'));
   const runtimeTone = getRuntimeTone(settings.runtimeStatus, settings.runtimeMode);
+  const appliedRuntimeTone = getRuntimeTone(appliedSettings.runtimeStatus, appliedSettings.runtimeMode);
+  const appliedRuntimeBadgeTone = getRuntimeBadgeTone(appliedSettings.runtimeStatus, appliedSettings.runtimeMode);
   const viewportScale = viewportHeight !== null && viewportHeight < 820 ? 0.82 : viewportHeight !== null && viewportHeight < 900 ? 0.92 : 1;
   const hasFilledCredential = isTencentProvider
     ? Boolean(settings.provider.secretId.trim() && (settings.provider.secretKey.trim() || settings.provider.hasSecretKey))
     : Boolean(settings.provider.apiKey.trim() || settings.provider.hasApiKey);
+  const hasPendingGeneralChanges = settings.defaultTargetLang !== appliedSettings.defaultTargetLang
+    || settings.translationTriggerMode !== appliedSettings.translationTriggerMode
+    || settings.shortcut.trim() !== appliedSettings.shortcut.trim();
+  const hasPendingOcrChanges = captureOcrEngine !== appliedCaptureOcrEngine;
+
+  async function handleSaveGeneralSettings() {
+    if (!desktopAvailable) {
+      setStatusMessage('当前环境无法保存本地设置。');
+      return;
+    }
+
+    setIsSaving(true);
+    setStatusMessage('正在保存通用设置...');
+
+    try {
+      const result = await desktopClient.saveSettings({
+        shortcut: settings.shortcut.trim(),
+        defaultTargetLang: settings.defaultTargetLang,
+        translationTriggerMode: settings.translationTriggerMode,
+      });
+
+      if (!result) {
+        throw new Error('save-settings 返回了空结果');
+      }
+
+      const nextTriggerMode = result.translationTriggerMode === 'auto' ? 'auto' : 'manual';
+
+      setSettings((current) => ({
+        ...current,
+        shortcut: result.shortcut,
+        defaultTargetLang: result.defaultTargetLang,
+        translationTriggerMode: nextTriggerMode,
+      }));
+      setAppliedSettings((current) => ({
+        ...current,
+        shortcut: result.shortcut,
+        defaultTargetLang: result.defaultTargetLang,
+        translationTriggerMode: nextTriggerMode,
+      }));
+      setStatusMessage('通用设置已保存。');
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : '通用设置保存失败。');
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  async function handleSaveOcrSettings() {
+    if (typeof window === 'undefined' || !captureOcrReady) {
+      setStatusMessage('截图识别设置还没准备好，请稍后再试。');
+      return;
+    }
+
+    setIsSavingOcr(true);
+    setStatusMessage('正在保存截图识别设置...');
+
+    try {
+      window.localStorage.setItem(OCR_ENGINE_STORAGE_KEY, captureOcrEngine);
+      window.localStorage.setItem(OCR_ENDPOINT_STORAGE_KEY, normalizedCaptureLocalOcrEndpoint);
+      setAppliedCaptureOcrEngine(captureOcrEngine);
+      setStatusMessage(`截图识别已保存，当前使用 ${activeOcrOption.label}。`);
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : '截图识别设置保存失败。');
+    } finally {
+      setIsSavingOcr(false);
+    }
+  }
 
   async function handleSave() {
     if (!desktopAvailable) {
@@ -777,6 +891,7 @@ export default function SettingsPage() {
       const result = await desktopClient.saveSettings({
         shortcut: settings.shortcut.trim(),
         defaultTargetLang: settings.defaultTargetLang,
+        translationTriggerMode: settings.translationTriggerMode,
         provider: isTencentProvider
           ? {
               kind: 'tencent',
@@ -821,6 +936,7 @@ export default function SettingsPage() {
       const nextState: SettingsState = {
         shortcut: result.shortcut,
         defaultTargetLang: result.defaultTargetLang,
+        translationTriggerMode: result.translationTriggerMode === 'auto' ? 'auto' : 'manual',
         runtimeMode: result.runtimeMode,
         runtimeStatus: result.runtimeMode === 'real' ? 'ready' : 'mock-fallback',
         providerPreset: settings.providerPreset,
@@ -841,6 +957,7 @@ export default function SettingsPage() {
       };
 
       setSettings(nextState);
+      setAppliedSettings(nextState);
       setStatusMessage(result.runtimeMode === 'real' ? '配置已保存，真实服务已就绪。' : '配置已保存，但运行时仍处于模拟模式。');
     } catch (error) {
       setStatusMessage(error instanceof Error ? error.message : '保存失败。');
@@ -932,12 +1049,21 @@ export default function SettingsPage() {
         }
       >
         <div className='space-y-3'>
-          <div className='rounded-[14px] border border-[#e2e8ee] bg-[#f8fbf9] px-3 py-2.5'>
-            <div className='flex items-center justify-between gap-3 text-[13px] font-semibold text-[#1f252c]'>
-              <span>{getProviderDisplayName(settings)}</span>
-              <span className={clsx('h-2.5 w-2.5 rounded-full', runtimeTone.dot)} />
+          <div className='rounded-[14px] border border-[#dce6df] bg-[linear-gradient(180deg,#f6fcf8_0%,#f9fbfd_100%)] px-4 py-3'>
+            <div className='flex flex-wrap items-start justify-between gap-3'>
+              <div className='min-w-0 flex-1'>
+                <div className='text-[11px] font-semibold uppercase tracking-[0.08em] text-[#6f7783]'>当前使用中</div>
+                <div className='mt-1 flex items-center gap-2 text-[15px] font-semibold text-[#1f252c]'>
+                  <span>{getProviderDisplayName(appliedSettings)}</span>
+                  <span className={clsx('h-2.5 w-2.5 rounded-full', appliedRuntimeTone.dot)} />
+                </div>
+                <div className='mt-1 text-[12px] leading-5 text-[#6f7783]'>{getProviderSummaryText(appliedSettings)}</div>
+              </div>
+              <StatusBadge
+                label={getRuntimeStatusText(appliedSettings.runtimeStatus, appliedSettings.runtimeMode)}
+                tone={appliedRuntimeBadgeTone}
+              />
             </div>
-            <div className='mt-0.5 text-[12px] leading-5 text-[#6f7783]'>{getProviderSummaryText(settings)}</div>
           </div>
 
           <div className='grid gap-2 grid-cols-2 xl:grid-cols-4'>
@@ -1157,9 +1283,22 @@ export default function SettingsPage() {
   function renderGeneralSection() {
     return (
       <PanelCard
-        title='常用偏好'
+        title='通用设置'
         description={undefined}
-        action={<StatusBadge label={getSurfaceLabel(desktopAvailable)} tone='neutral' />}
+        action={(
+          <div className='flex flex-wrap items-center justify-end gap-2'>
+            <StatusBadge label={getSurfaceLabel(desktopAvailable)} tone='neutral' />
+            <StatusBadge label={hasPendingGeneralChanges ? '未保存' : '已保存'} tone={hasPendingGeneralChanges ? 'warning' : 'success'} />
+            <Button
+              onClick={() => void handleSaveGeneralSettings()}
+              disabled={isHydrating || isSaving || !desktopAvailable}
+              className='h-9 rounded-[11px] border-[#11a36f] bg-[#11a36f] px-3 text-white hover:border-[#0d875c] hover:bg-[#0d875c]'
+            >
+              <SaveIcon />
+              {isSaving ? '保存中' : '保存设置'}
+            </Button>
+          </div>
+        )}
       >
         <div className='space-y-3'>
           <FieldBlock label='默认目标语言'>
@@ -1177,6 +1316,37 @@ export default function SettingsPage() {
                 </option>
               ))}
             </select>
+          </FieldBlock>
+
+          <FieldBlock label='翻译触发方式' description='你可以选择手动点按钮翻译，或者在输入停顿后自动翻译。'>
+            <div className='grid gap-2 md:grid-cols-2'>
+              {translationTriggerOptions.map((option) => {
+                const active = settings.translationTriggerMode === option.value;
+
+                return (
+                  <button
+                    key={option.value}
+                    type='button'
+                    disabled={formDisabled}
+                    onClick={() => setSettings((current) => ({ ...current, translationTriggerMode: option.value }))}
+                    className={clsx(
+                      'rounded-[14px] border px-3 py-3 text-left transition',
+                      active
+                        ? 'border-[#1ca36f] bg-[#effcf5]'
+                        : 'border-[#d9e1e8] bg-white hover:border-[#c9d5e0] hover:bg-[#fbfcfd]',
+                    )}
+                  >
+                    <div className='flex items-center justify-between gap-3'>
+                      <div className='min-w-0'>
+                        <div className='text-[14px] font-semibold text-[#1f252c]'>{option.label}</div>
+                        <div className='mt-1 text-[12px] leading-5 text-[#6f7783]'>{option.helper}</div>
+                      </div>
+                      {active ? <StatusBadge label='当前' tone='success' /> : null}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
           </FieldBlock>
 
           <FieldBlock label='全局快捷键'>
@@ -1219,9 +1389,39 @@ export default function SettingsPage() {
       <PanelCard
         title='截图识别'
         description={undefined}
-        action={<StatusBadge label={activeOcrOption.badge} tone={captureOcrEngine === 'local-paddleocr' ? 'success' : 'neutral'} />}
+        action={(
+          <div className='flex flex-wrap items-center justify-end gap-2'>
+            <StatusBadge label={appliedOcrOption.label} tone={getOcrTone(appliedCaptureOcrEngine)} />
+            <StatusBadge label={hasPendingOcrChanges ? '未保存' : '已保存'} tone={hasPendingOcrChanges ? 'warning' : 'success'} />
+            <Button
+              onClick={() => void handleSaveOcrSettings()}
+              disabled={!captureOcrReady || isSavingOcr}
+              className='h-9 rounded-[11px] border-[#11a36f] bg-[#11a36f] px-3 text-white hover:border-[#0d875c] hover:bg-[#0d875c]'
+            >
+              <SaveIcon />
+              {isSavingOcr ? '保存中' : '保存设置'}
+            </Button>
+          </div>
+        )}
       >
         <div className='space-y-3'>
+          <div className='rounded-[14px] border border-[#dce6df] bg-[linear-gradient(180deg,#f6fcf8_0%,#f9fbfd_100%)] px-4 py-3'>
+            <div className='flex flex-wrap items-start justify-between gap-3'>
+              <div className='min-w-0 flex-1'>
+                <div className='text-[11px] font-semibold uppercase tracking-[0.08em] text-[#6f7783]'>当前使用中</div>
+                <div className='mt-1 flex items-center gap-2 text-[15px] font-semibold text-[#1f252c]'>
+                  <span>{appliedOcrOption.label}</span>
+                  <span className={clsx('h-2.5 w-2.5 rounded-full', appliedCaptureOcrEngine === 'cloud-vision' ? 'bg-[#9aa7b6]' : 'bg-[#11a36f]')} />
+                </div>
+                <div className='mt-1 text-[12px] leading-5 text-[#6f7783]'>{getOcrSummary(appliedCaptureOcrEngine)}</div>
+                <div className='mt-1 text-[12px] leading-5 text-[#6f7783]'>
+                  {getOcrCompatibilityMessage(appliedSettings, appliedCaptureOcrEngine, normalizedCaptureLocalOcrEndpoint)}
+                </div>
+              </div>
+              <StatusBadge label={appliedOcrOption.badge} tone={getOcrTone(appliedCaptureOcrEngine)} />
+            </div>
+          </div>
+
           <div className='grid grid-cols-2 gap-2'>
             {screenshotOcrOptions.map((option) => {
               const active = captureOcrEngine === option.value;
@@ -1252,25 +1452,17 @@ export default function SettingsPage() {
 
           <div className='space-y-3'>
               {isLocalScreenshotOcrEngine(captureOcrEngine) ? (
-                <div className='rounded-[16px] border border-[#dce5ec] bg-[#fbfcfe] p-4'>
-                  <FieldBlock label='本地 OCR 地址'>
-                    <Input
-                      id='local-ocr-endpoint'
-                      name='local-ocr-endpoint'
-                      autoComplete='url'
-                      spellCheck={false}
-                      value={captureLocalOcrEndpoint}
-                      onChange={(event) => setCaptureLocalOcrEndpoint(event.target.value)}
-                      placeholder={DEFAULT_LOCAL_OCR_ENDPOINT}
-                      className='h-10 rounded-[12px] border-[#d7dbe2]'
-                    />
-                  </FieldBlock>
-                </div>
+                <NoticeCard
+                  tone='success'
+                  title='本地 OCR 已内置'
+                  message='这几个本地引擎现在都由应用自动管理。你不需要再启动本地 Web 服务，也不需要处理端口占用；首次使用时应用会自己准备运行环境。'
+                />
               ) : (
                 <NoticeCard tone='neutral' title='云端视觉' message='云端视觉会直接复用当前翻译服务；如果当前模型不支持图片输入，截图识别就会失败。' />
               )}
+              {hasPendingOcrChanges ? <div className='text-[12px] leading-5 text-[#b15b00]'>你刚刚改了 OCR 方案，点右上角“保存设置”后才会正式生效。</div> : null}
               <div className='text-[12px] leading-5 text-[#6f7783]'>
-                {getOcrCompatibilityMessage(settings, captureOcrEngine, normalizedCaptureLocalOcrEndpoint)}
+                {getOcrCompatibilityMessage(appliedSettings, captureOcrEngine, normalizedCaptureLocalOcrEndpoint)}
               </div>
           </div>
         </div>
@@ -1311,7 +1503,7 @@ export default function SettingsPage() {
               <div className='mr-2 text-[22px] font-semibold tracking-[-0.04em] text-[#1b2128]'>设置</div>
               <StatusBadge label={getSurfaceLabel(desktopAvailable)} tone='neutral' />
               <StatusBadge label={getRuntimeStatusText(settings.runtimeStatus, settings.runtimeMode)} tone={settings.runtimeStatus === 'ready' ? 'success' : 'neutral'} />
-              <StatusBadge label={activeOcrOption.label} tone='neutral' />
+              <StatusBadge label={`OCR · ${appliedOcrOption.label}`} tone={getOcrTone(appliedCaptureOcrEngine)} />
             </div>
           </section>
 

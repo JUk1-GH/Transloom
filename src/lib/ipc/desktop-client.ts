@@ -49,6 +49,7 @@ export interface DesktopSettingsPayload {
   shortcut: string;
   desktopMode: boolean;
   defaultTargetLang: string;
+  translationTriggerMode: 'manual' | 'auto';
   runtimeMode: 'real' | 'mock';
   provider: DesktopProviderSummary;
 }
@@ -56,6 +57,7 @@ export interface DesktopSettingsPayload {
 export interface DesktopSettingsUpdate {
   shortcut?: string;
   defaultTargetLang?: string;
+  translationTriggerMode?: 'manual' | 'auto';
   provider?: {
     kind?: Extract<ProviderKind, 'openai-compatible' | 'tencent'>;
     baseUrl?: string;

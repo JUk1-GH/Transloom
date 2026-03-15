@@ -6,6 +6,7 @@ import type { DesktopCapabilities } from '@/components/desktop/permission-onboar
 import { AppShell } from '@/components/ui/app-shell';
 import { TextTranslationWorkspace } from '@/components/workspace/text-translation-workspace';
 import { desktopClient } from '@/lib/ipc/desktop-client';
+import type { ScreenshotOcrResponse } from '@/lib/pipeline/run-screenshot-ocr';
 import {
   OCR_ENDPOINT_STORAGE_KEY,
   OCR_ENGINE_STORAGE_KEY,
@@ -89,24 +90,41 @@ export default function Home() {
     };
   }, [popupState?.targetLang, workspaceDraft?.targetLang]);
 
+  const mapOcrToWorkspaceDraft = useCallback((ocr: ScreenshotOcrResponse, capturedAt?: string, ocrElapsedMs?: number): WorkspaceDraftState => {
+    const sourceText = ocr.regions.map((region) => region.text).filter(Boolean).join('\n');
+
+    return {
+      sourceText,
+      translatedText: '',
+      targetLang: workspaceDraft?.targetLang ?? popupState?.targetLang ?? 'zh-CN',
+      warning: ocr.warning,
+      ocrElapsedMs,
+      updatedAt: new Date().toISOString(),
+      sourceType: 'capture',
+      capture: {
+        imagePath: ocr.imagePath,
+        regionCount: ocr.regions.length,
+        capturedAt,
+      },
+    };
+  }, [popupState?.targetLang, workspaceDraft?.targetLang]);
+
   const runCaptureTranslation = useCallback(async (imagePath: string, capturedAt?: string) => {
     setCaptureOverlay(null);
     setCaptureLoading(true);
-    setCaptureMessage('正在处理截图…');
+    setCaptureMessage('正在识别截图…');
 
     try {
       const providerSecret = desktopClient.isAvailable() ? await desktopClient.getProviderSecret() : undefined;
-      const targetLang = workspaceDraft?.targetLang ?? popupState?.targetLang ?? 'zh-CN';
       const captureOcrSettings = readCaptureOcrSettings();
-      const response = await fetch('/api/capture/translate', {
+      const startedAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
+      const response = await fetch('/api/capture/ocr', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           imagePath,
-          targetLang,
           ocrEngine: captureOcrSettings.ocrEngine,
           localOcrEndpoint: captureOcrSettings.localOcrEndpoint,
-          providerId: providerSecret?.kind ?? 'openai-compatible',
           providerConfig: {
             kind: providerSecret?.kind,
             baseUrl: providerSecret?.baseUrl,
@@ -126,11 +144,11 @@ export default function Home() {
         return;
       }
 
-      const nextOverlay = payload as OverlayDocument;
-      const nextDraft = mapOverlayToWorkspaceDraft(nextOverlay, capturedAt);
-      setCaptureOverlay(nextOverlay);
+      const elapsed = Math.max(1, Math.round((typeof performance !== 'undefined' ? performance.now() : Date.now()) - startedAt));
+      const ocr = payload as ScreenshotOcrResponse;
+      const nextDraft = mapOcrToWorkspaceDraft(ocr, capturedAt, elapsed);
       setWorkspaceDraft(nextDraft);
-      setCaptureMessage(nextOverlay.warning ?? (nextOverlay.mode === 'mock' ? '已载入模拟截图结果。' : '截图结果已更新。'));
+      setCaptureMessage(ocr.warning ? `${ocr.warning} 正在翻译…` : 'OCR 已完成，正在翻译…');
       requestAnimationFrame(() => {
         workspaceSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
       });
@@ -139,7 +157,7 @@ export default function Home() {
     } finally {
       setCaptureLoading(false);
     }
-  }, [mapOverlayToWorkspaceDraft, popupState?.targetLang, readCaptureOcrSettings, workspaceDraft?.targetLang]);
+  }, [mapOcrToWorkspaceDraft, readCaptureOcrSettings]);
 
   useEffect(() => {
     let cancelled = false;

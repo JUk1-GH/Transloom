@@ -1,7 +1,7 @@
 'use client';
 
 import type { ReactNode } from 'react';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import clsx from 'clsx';
 import type { OverlayDocument, PopupTranslationState, WorkspaceDraftState } from '@/domain/capture/types';
 import { Button } from '@/components/ui/button';
@@ -42,7 +42,8 @@ type ProviderOption = {
   enabled: boolean;
 };
 
-type WorkspaceTab = 'text' | 'screenshot' | 'popup';
+type WorkspaceTab = 'text' | 'popup';
+type TranslationTriggerMode = 'manual' | 'auto';
 
 async function readResponsePayload(response: Response) {
   const contentType = response.headers.get('content-type') ?? '';
@@ -126,13 +127,16 @@ function normalizeLanguage(value?: string | null) {
   return (value ?? '').trim().toLowerCase();
 }
 
-function getFileName(path?: string | null) {
-  if (!path) {
-    return null;
+function formatElapsedTime(elapsedMs: number) {
+  if (elapsedMs < 1000) {
+    return `${elapsedMs}ms`;
   }
 
-  const segments = path.split(/[\\/]/).filter(Boolean);
-  return segments.at(-1) ?? path;
+  if (elapsedMs < 10_000) {
+    return `${(elapsedMs / 1000).toFixed(2)}s`;
+  }
+
+  return `${(elapsedMs / 1000).toFixed(1)}s`;
 }
 
 function pickGlossaryForLanguages(options: GlossarySummary[], sourceLang: string, targetLang: string) {
@@ -177,12 +181,18 @@ export function TextTranslationWorkspace({
     state?: PopupTranslationState | null;
   };
 }) {
+  const autoCaptureTranslateRef = useRef<string | null>(null);
+  const autoTranslateArmedRef = useRef(false);
+  const translationRequestIdRef = useRef(0);
+  const sourceRef = useRef(initialSource);
+  const translationTriggerModeRef = useRef<TranslationTriggerMode>('manual');
   const [runtime, setRuntime] = useState<RuntimeSnapshot | null>(null);
   const [providerOptions, setProviderOptions] = useState<ProviderOption[]>(fallbackProviders);
   const [selectedProviderId, setSelectedProviderId] = useState('openai-compatible');
   const [source, setSource] = useState(initialSource);
   const [sourceLang, setSourceLang] = useState('');
   const [targetLang, setTargetLang] = useState('zh-CN');
+  const [translationTriggerMode, setTranslationTriggerMode] = useState<TranslationTriggerMode>('manual');
   const [glossaryOptions, setGlossaryOptions] = useState<GlossarySummary[]>([]);
   const [selectedGlossaryId, setSelectedGlossaryId] = useState('');
   const [translatedText, setTranslatedText] = useState('');
@@ -192,13 +202,58 @@ export function TextTranslationWorkspace({
   const [isBootstrapping, setIsBootstrapping] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [charactersBilled, setCharactersBilled] = useState<number | null>(null);
+  const [ocrElapsedMs, setOcrElapsedMs] = useState<number | null>(workspaceDraft?.ocrElapsedMs ?? null);
+  const [translationElapsedMs, setTranslationElapsedMs] = useState<number | null>(null);
   const [activeTab, setActiveTab] = useState<WorkspaceTab>(
-    workspaceDraft?.sourceType === 'capture'
-      ? 'screenshot'
-      : workspaceDraft?.sourceType === 'popup'
-        ? 'popup'
-        : 'text',
+    workspaceDraft?.sourceType === 'popup'
+      ? 'popup'
+      : 'text',
   );
+
+  const invalidatePendingTranslation = useCallback(() => {
+    translationRequestIdRef.current += 1;
+    setIsLoading(false);
+  }, []);
+
+  const applyWorkspaceDraft = useCallback((draft: WorkspaceDraftState) => {
+    autoTranslateArmedRef.current = false;
+    invalidatePendingTranslation();
+    setSource(draft.sourceText);
+    setTranslatedText(draft.translatedText ?? '');
+    setTranslationMode(null);
+    setTargetLang(draft.targetLang);
+    setSourceLang(draft.sourceLang ?? '');
+    setWarning(draft.warning ?? null);
+    setError(null);
+    setCharactersBilled(null);
+    setOcrElapsedMs(draft.ocrElapsedMs ?? null);
+    setTranslationElapsedMs(null);
+  }, [invalidatePendingTranslation]);
+
+  useEffect(() => {
+    sourceRef.current = source;
+  }, [source]);
+
+  useEffect(() => {
+    translationTriggerModeRef.current = translationTriggerMode;
+  }, [translationTriggerMode]);
+
+  const syncTranslationTriggerMode = useCallback(async () => {
+    if (!desktopClient.isAvailable()) {
+      return;
+    }
+
+    const savedSettings = await desktopClient.getSettings();
+    if (!savedSettings) {
+      return;
+    }
+
+    const nextMode: TranslationTriggerMode = savedSettings.translationTriggerMode === 'auto' ? 'auto' : 'manual';
+    setTranslationTriggerMode(nextMode);
+    autoTranslateArmedRef.current = nextMode === 'auto'
+      ? translationTriggerModeRef.current !== 'auto' && Boolean(sourceRef.current.trim())
+      : false;
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -238,6 +293,12 @@ export function TextTranslationWorkspace({
           if (savedSettings?.defaultTargetLang) {
             setTargetLang(savedSettings.defaultTargetLang);
           }
+
+          const nextTriggerMode: TranslationTriggerMode = savedSettings?.translationTriggerMode === 'auto' ? 'auto' : 'manual';
+          setTranslationTriggerMode(nextTriggerMode);
+          autoTranslateArmedRef.current = nextTriggerMode === 'auto'
+            && translationTriggerModeRef.current !== 'auto'
+            && Boolean((nextWorkspaceDraft?.sourceText ?? sourceRef.current).trim());
 
           if (Array.isArray(glossaryPayload?.summaries)) {
             setGlossaryOptions(glossaryPayload.summaries);
@@ -298,7 +359,31 @@ export function TextTranslationWorkspace({
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [applyWorkspaceDraft]);
+
+  useEffect(() => {
+    if (!desktopClient.isAvailable()) {
+      return;
+    }
+
+    const handleFocus = () => {
+      void syncTranslationTriggerMode();
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        void syncTranslationTriggerMode();
+      }
+    };
+
+    void syncTranslationTriggerMode();
+    window.addEventListener('focus', handleFocus);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      window.removeEventListener('focus', handleFocus);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [syncTranslationTriggerMode]);
 
   const sourceCharacters = useMemo(() => source.trim().length, [source]);
   const selectedProvider = providerOptions.find((item) => item.kind === selectedProviderId) ?? fallbackProviders[0];
@@ -367,16 +452,6 @@ export function TextTranslationWorkspace({
         ? '请先输入要翻译的文本。'
         : null;
 
-  function applyWorkspaceDraft(draft: WorkspaceDraftState) {
-    setSource(draft.sourceText);
-    setTranslatedText(draft.translatedText ?? '');
-    setTranslationMode(null);
-    setTargetLang(draft.targetLang);
-    setSourceLang(draft.sourceLang ?? '');
-    setWarning(draft.warning ?? null);
-    setError(null);
-  }
-
   useEffect(() => {
     if (!desktopClient.isAvailable()) {
       return;
@@ -389,23 +464,21 @@ export function TextTranslationWorkspace({
     return () => {
       dispose();
     };
-  }, []);
+  }, [applyWorkspaceDraft]);
 
   useEffect(() => {
     if (workspaceDraft) {
       applyWorkspaceDraft(workspaceDraft);
     }
-  }, [workspaceDraft]);
+  }, [applyWorkspaceDraft, workspaceDraft]);
 
   useEffect(() => {
-    if (workspaceDraft?.sourceType === 'capture') {
-      setActiveTab('screenshot');
+    if (workspaceDraft?.sourceType === 'popup') {
+      setActiveTab('popup');
       return;
     }
 
-    if (workspaceDraft?.sourceType === 'popup') {
-      setActiveTab('popup');
-    }
+    setActiveTab('text');
   }, [workspaceDraft?.sourceType, workspaceDraft?.updatedAt]);
 
   useEffect(() => {
@@ -434,6 +507,8 @@ export function TextTranslationWorkspace({
       return;
     }
 
+    invalidatePendingTranslation();
+    autoTranslateArmedRef.current = translationTriggerMode === 'auto';
     setSourceLang(targetLang);
     setTargetLang(sourceLang);
     setSource(translatedText || source);
@@ -442,12 +517,27 @@ export function TextTranslationWorkspace({
     setWarning(null);
   }
 
-  async function handleTranslate() {
-    if (!source.trim()) {
+  const handleTranslate = useCallback(async (options?: {
+    sourceText?: string;
+    sourceLang?: string;
+    targetLang?: string;
+    glossaryId?: string;
+    captureImagePath?: string;
+  }) => {
+    const sourceText = (options?.sourceText ?? source).trim();
+    const requestedSourceLang = options?.sourceLang ?? sourceLang;
+    const requestedTargetLang = options?.targetLang ?? targetLang;
+    const requestedGlossaryId = options?.glossaryId ?? selectedGlossaryId;
+    const captureImagePath = options?.captureImagePath
+      ?? (workspaceDraft?.sourceType === 'capture' ? workspaceDraft.capture?.imagePath : undefined);
+
+    if (!sourceText) {
+      invalidatePendingTranslation();
       setTranslatedText('');
       setCharactersBilled(null);
       setWarning(null);
       setError('请输入要翻译的文本。');
+      setTranslationElapsedMs(null);
       return;
     }
 
@@ -455,6 +545,9 @@ export function TextTranslationWorkspace({
     setError(null);
     setWarning(null);
     setTranslationMode(null);
+    setTranslationElapsedMs(null);
+    const requestId = translationRequestIdRef.current + 1;
+    translationRequestIdRef.current = requestId;
 
     try {
       const providerSecret = desktopClient.isAvailable() ? await desktopClient.getProviderSecret() : undefined;
@@ -470,14 +563,16 @@ export function TextTranslationWorkspace({
             projectId: providerSecret.projectId,
           }
         : undefined;
-      const response = await fetch('/api/translate', {
+      const startedAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
+      const response = await fetch(captureImagePath ? '/api/capture/workspace-translate' : '/api/translate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          text: source.trim(),
-          sourceLang: sourceLang || undefined,
-          targetLang,
-          glossaryId: selectedGlossaryId || undefined,
+          ...(captureImagePath ? { imagePath: captureImagePath } : {}),
+          text: sourceText,
+          sourceLang: requestedSourceLang || undefined,
+          targetLang: requestedTargetLang,
+          glossaryId: requestedGlossaryId || undefined,
           providerId: selectedProviderId,
           providerConfig,
         }),
@@ -488,19 +583,77 @@ export function TextTranslationWorkspace({
         throw new Error(result.message ?? result.code ?? '翻译失败');
       }
 
+      if (requestId !== translationRequestIdRef.current) {
+        return;
+      }
+
       setTranslatedText(result.text ?? '');
       setTranslationMode(result.mode === 'mock' ? 'mock' : 'real');
       setWarning(result.warning ?? null);
       setCharactersBilled(result.charactersBilled ?? null);
+      setTranslationElapsedMs(Math.max(1, Math.round((typeof performance !== 'undefined' ? performance.now() : Date.now()) - startedAt)));
     } catch (translateError) {
+      if (requestId !== translationRequestIdRef.current) {
+        return;
+      }
+
       setTranslatedText('');
       setTranslationMode(null);
       setCharactersBilled(null);
+      setTranslationElapsedMs(null);
       setError(translateError instanceof Error ? translateError.message : '翻译失败');
     } finally {
-      setIsLoading(false);
+      if (requestId === translationRequestIdRef.current) {
+        setIsLoading(false);
+      }
     }
-  }
+  }, [invalidatePendingTranslation, selectedGlossaryId, selectedProviderId, source, sourceLang, targetLang, workspaceDraft?.capture?.imagePath, workspaceDraft?.sourceType]);
+
+  useEffect(() => {
+    if (isBootstrapping || !workspaceDraft || workspaceDraft.sourceType !== 'capture') {
+      return;
+    }
+
+    if (!workspaceDraft.sourceText.trim() || workspaceDraft.translatedText?.trim()) {
+      return;
+    }
+
+    if (autoCaptureTranslateRef.current === workspaceDraft.updatedAt) {
+      return;
+    }
+
+    autoCaptureTranslateRef.current = workspaceDraft.updatedAt;
+
+    const preferredGlossaryId = selectedGlossaryId
+      || pickGlossaryForLanguages(glossaryOptions, workspaceDraft.sourceLang ?? '', workspaceDraft.targetLang)?.id
+      || '';
+
+    void handleTranslate({
+      sourceText: workspaceDraft.sourceText,
+      sourceLang: workspaceDraft.sourceLang ?? '',
+      targetLang: workspaceDraft.targetLang,
+      glossaryId: preferredGlossaryId,
+      captureImagePath: workspaceDraft.capture?.imagePath,
+    });
+  }, [glossaryOptions, handleTranslate, isBootstrapping, selectedGlossaryId, workspaceDraft]);
+
+  useEffect(() => {
+    if (translationTriggerMode !== 'auto') {
+      autoTranslateArmedRef.current = false;
+      return;
+    }
+
+    if (isBootstrapping || isLoading || !source.trim() || !autoTranslateArmedRef.current) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      autoTranslateArmedRef.current = false;
+      void handleTranslate();
+    }, 520);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [handleTranslate, isBootstrapping, isLoading, source, sourceLang, targetLang, selectedGlossaryId, translationTriggerMode]);
 
   const mockStatusDetail = runtime?.status === 'model-missing'
     ? '当前缺少模型配置，所以本次结果来自模拟回退。'
@@ -521,7 +674,6 @@ export function TextTranslationWorkspace({
     : hasEnabledProvider
       ? (runtime?.provider?.label?.trim() || selectedProvider.label)
       : '未启用';
-  const latestCaptureLabel = getFileName(capture?.latestCapturePath);
   const isCaptureWorkspace = workspaceDraft?.sourceType === 'capture';
   const sourcePlaceholder = isCaptureWorkspace ? 'OCR 识别内容会显示在这里。' : '在这里输入或粘贴要翻译的内容...';
   const providerMetaLabel = translatedText
@@ -529,20 +681,21 @@ export function TextTranslationWorkspace({
     : `${providerLabel} · ${runtimeModeLabel}`;
   const footerStatusMessage = capture?.actionDisabledReason ?? statusMessage;
   const footerStatusTone = capture?.actionDisabledReason ? 'text-[#8c6b12]' : statusTone;
-  const translateButtonLabel = isLoading ? '翻译中...' : translatedText ? '重新翻译' : '翻译';
+  const translateButtonLabel = isLoading ? '翻译中...' : translationTriggerMode === 'auto' ? '立即翻译' : translatedText ? '重新翻译' : '翻译';
   const shouldShowFooter = Boolean(error || warning || capture?.actionDisabledReason);
-  const captureSourceText = isCaptureWorkspace ? source : '';
-  const captureTranslatedText = isCaptureWorkspace ? translatedText : '';
-  const captureHasResult = Boolean(captureSourceText || captureTranslatedText || capture?.overlay);
   const popupPreview = popup?.state ?? null;
 
   function handleClear() {
+    invalidatePendingTranslation();
+    autoTranslateArmedRef.current = false;
     setSource('');
     setTranslatedText('');
     setTranslationMode(null);
     setError(null);
     setWarning(null);
     setCharactersBilled(null);
+    setOcrElapsedMs(null);
+    setTranslationElapsedMs(null);
   }
 
   return (
@@ -556,6 +709,23 @@ export function TextTranslationWorkspace({
           </div>
 
           {hero ? <div className='min-w-[280px] flex-1'>{hero}</div> : <div className='hidden flex-1 md:block' />}
+
+          {capture ? (
+            <Button
+              size='sm'
+              onClick={() => capture.onOpenCapture()}
+              disabled={Boolean(capture.actionDisabledReason) || capture.isLoading}
+              className='h-10 shrink-0 rounded-[10px] border-[#242529] bg-[#242529] px-4 text-[14px] text-white hover:border-[#191a1d] hover:bg-[#191a1d]'
+            >
+              <svg width='16' height='16' viewBox='0 0 16 16' fill='none' aria-hidden='true'>
+                <path d='M3.1 5.45V3.7C3.1 3.04 3.64 2.5 4.3 2.5H6.05' stroke='currentColor' strokeWidth='1.4' strokeLinecap='round' />
+                <path d='M9.95 2.5H11.7C12.36 2.5 12.9 3.04 12.9 3.7V5.45' stroke='currentColor' strokeWidth='1.4' strokeLinecap='round' />
+                <path d='M12.9 10.55V12.3C12.9 12.96 12.36 13.5 11.7 13.5H9.95' stroke='currentColor' strokeWidth='1.4' strokeLinecap='round' />
+                <path d='M6.05 13.5H4.3C3.64 13.5 3.1 12.96 3.1 12.3V10.55' stroke='currentColor' strokeWidth='1.4' strokeLinecap='round' />
+              </svg>
+              {capture.isLoading ? '截图处理中...' : '截图'}
+            </Button>
+          ) : null}
 
           <div className='shrink-0 flex items-center gap-1 rounded-[10px] border border-[#d6d8dd] bg-[#f5f5f6] p-1 shadow-[0_1px_2px_rgba(0,0,0,0.04)]'>
             <button
@@ -575,27 +745,6 @@ export function TextTranslationWorkspace({
               </svg>
               文本
             </button>
-
-            {capture ? (
-              <button
-                type='button'
-                onClick={() => setActiveTab('screenshot')}
-                className={clsx(
-                  'inline-flex h-9 items-center gap-2 rounded-[8px] px-3.5 py-2 text-[14px] font-medium transition-all',
-                  activeTab === 'screenshot'
-                    ? 'bg-white text-[#222326] shadow-[0_1px_2px_rgba(0,0,0,0.05)]'
-                    : 'text-[#70747c] hover:bg-white hover:text-[#2c2c2e]',
-                )}
-              >
-                <svg width='16' height='16' viewBox='0 0 16 16' fill='none' aria-hidden='true'>
-                  <path d='M3.1 5.45V3.7C3.1 3.04 3.64 2.5 4.3 2.5H6.05' stroke='currentColor' strokeWidth='1.4' strokeLinecap='round' />
-                  <path d='M9.95 2.5H11.7C12.36 2.5 12.9 3.04 12.9 3.7V5.45' stroke='currentColor' strokeWidth='1.4' strokeLinecap='round' />
-                  <path d='M12.9 10.55V12.3C12.9 12.96 12.36 13.5 11.7 13.5H9.95' stroke='currentColor' strokeWidth='1.4' strokeLinecap='round' />
-                  <path d='M6.05 13.5H4.3C3.64 13.5 3.1 12.96 3.1 12.3V10.55' stroke='currentColor' strokeWidth='1.4' strokeLinecap='round' />
-                </svg>
-                {capture.isLoading ? '截图处理中...' : '截图'}
-              </button>
-            ) : null}
 
             {popup ? (
               <button
@@ -631,7 +780,11 @@ export function TextTranslationWorkspace({
                 <select
                   aria-label='源语言'
                   value={sourceLang}
-                  onChange={(event) => setSourceLang(event.target.value)}
+                  onChange={(event) => {
+                    invalidatePendingTranslation();
+                    autoTranslateArmedRef.current = translationTriggerMode === 'auto' && Boolean(source.trim());
+                    setSourceLang(event.target.value);
+                  }}
                   className='h-8 w-[94px] rounded-[8px] border border-transparent bg-transparent px-2.5 text-[15px] font-medium text-[#2f3541] outline-none transition hover:bg-[#f0f2f5] focus:border-[#dde2e8] focus:bg-white'
                 >
                   {languageOptions.map((option) => (
@@ -658,7 +811,11 @@ export function TextTranslationWorkspace({
                 <select
                   aria-label='目标语言'
                   value={targetLang}
-                  onChange={(event) => setTargetLang(event.target.value)}
+                  onChange={(event) => {
+                    invalidatePendingTranslation();
+                    autoTranslateArmedRef.current = translationTriggerMode === 'auto' && Boolean(source.trim());
+                    setTargetLang(event.target.value);
+                  }}
                   className='h-8 w-[124px] rounded-[8px] border border-transparent bg-transparent px-2.5 text-[15px] font-medium text-[#2f3541] outline-none transition hover:bg-[#f0f2f5] focus:border-[#dde2e8] focus:bg-white'
                 >
                   {languageOptions.filter((option) => option.value).map((option) => (
@@ -675,7 +832,11 @@ export function TextTranslationWorkspace({
                   <select
                     aria-label='术语表'
                     value={selectedGlossaryId}
-                    onChange={(event) => setSelectedGlossaryId(event.target.value)}
+                    onChange={(event) => {
+                      invalidatePendingTranslation();
+                      autoTranslateArmedRef.current = translationTriggerMode === 'auto' && Boolean(source.trim());
+                      setSelectedGlossaryId(event.target.value);
+                    }}
                     className='h-8 w-[112px] rounded-[8px] border border-transparent bg-transparent px-2 text-[14px] text-[#39414d] outline-none transition hover:bg-[#f0f2f5] focus:border-[#dde2e8] focus:bg-white'
                     disabled={isBootstrapping || glossaryOptions.length === 0}
                   >
@@ -710,7 +871,14 @@ export function TextTranslationWorkspace({
               <div className='relative min-h-[440px] overflow-hidden rounded-[14px] border border-[#d8dbe1] bg-white shadow-[0_1px_2px_rgba(0,0,0,0.04)] transition-all focus-within:ring-2 focus-within:ring-[#22c55e]/20'>
                 <Textarea
                   value={source}
-                  onChange={(event) => setSource(event.target.value)}
+                  onChange={(event) => {
+                    invalidatePendingTranslation();
+                    autoTranslateArmedRef.current = translationTriggerMode === 'auto' && Boolean(event.target.value.trim());
+                    setSource(event.target.value);
+                    if (ocrElapsedMs !== null) {
+                      setOcrElapsedMs(null);
+                    }
+                  }}
                   className='h-full min-h-[440px] resize-none border-0 bg-transparent p-5 pb-20 text-[15px] leading-relaxed text-[#2b2f36] shadow-none focus:border-0 focus-visible:ring-0'
                   placeholder={sourcePlaceholder}
                   spellCheck={false}
@@ -718,9 +886,10 @@ export function TextTranslationWorkspace({
 
                 <div className='pointer-events-none absolute bottom-4 left-4 flex flex-wrap items-center gap-3 text-[12px] text-[#a0a5ae]'>
                   <span>{sourceCharacters} 字符</span>
+                  {ocrElapsedMs !== null ? <span>OCR {formatElapsedTime(ocrElapsedMs)}</span> : null}
                 </div>
 
-                {source.trim() ? (
+                {source.trim() && translationTriggerMode === 'manual' ? (
                   <Button
                     size='sm'
                     onClick={() => void handleTranslate()}
@@ -751,6 +920,7 @@ export function TextTranslationWorkspace({
                     <span>{providerMetaLabel}</span>
                     {translationMode === 'real' ? <span className='text-[#1b8d53]'>• 真实</span> : null}
                     {translationMode === 'mock' ? <span className='text-[#b07d12]'>• 模拟</span> : null}
+                    {translationElapsedMs !== null && translationMode ? <span>· {formatElapsedTime(translationElapsedMs)}</span> : null}
                   </div>
                 ) : null}
 
@@ -776,92 +946,6 @@ export function TextTranslationWorkspace({
                 </div>
               </div>
             ) : null}
-          </>
-        ) : null}
-
-        {activeTab === 'screenshot' && capture ? (
-          <>
-            <div className='mb-4 flex flex-wrap items-center justify-between gap-3 rounded-[12px] border border-[#d9dbe1] bg-[#fafafa] px-4 py-3 shadow-[0_1px_2px_rgba(0,0,0,0.03)]'>
-              <div>
-                <div className='text-[15px] font-medium text-[#2f3541]'>截图翻译</div>
-                <div className='mt-1 text-[13px] text-[#7c8189]'>截取一个区域后，识别内容和翻译结果都会留在同一个工作区里。</div>
-              </div>
-
-              <div className='flex flex-wrap items-center gap-2'>
-                {latestCaptureLabel ? (
-                  <span className='rounded-full border border-[#dde2e8] bg-white px-3 py-1 text-[12px] text-[#6f7682]'>
-                    {latestCaptureLabel}
-                  </span>
-                ) : null}
-                <Button
-                  size='sm'
-                  onClick={() => capture.onOpenCapture()}
-                  disabled={Boolean(capture.actionDisabledReason) || capture.isLoading}
-                  className='rounded-[10px] border-[#242529] bg-[#242529] px-4 text-white hover:border-[#191a1d] hover:bg-[#191a1d]'
-                >
-                  {capture.isLoading ? '处理中...' : '开始截图'}
-                </Button>
-              </div>
-            </div>
-
-            <div className='grid min-h-0 flex-1 gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]'>
-              <section className='min-h-[440px] overflow-hidden rounded-[14px] border border-[#d8dbe1] bg-white shadow-[0_1px_2px_rgba(0,0,0,0.04)]'>
-                <div className='border-b border-[#eceef2] px-5 py-4'>
-                  <div className='text-[15px] font-medium text-[#262a31]'>识别内容</div>
-                  <div className='mt-1 text-[13px] text-[#7a818c]'>
-                    {captureHasResult ? '这里显示最近一张截图识别出的 OCR 文本。' : '还没有处理过截图。'}
-                  </div>
-                </div>
-                <div className='h-[calc(100%-80px)] overflow-auto p-5'>
-                  {captureHasResult ? (
-                    <div className='whitespace-pre-wrap break-words rounded-[12px] bg-[#fafafa] p-4 text-[15px] leading-relaxed text-[#2b2f36]'>
-                      {captureSourceText || '这张截图没有返回可识别文本。'}
-                    </div>
-                  ) : (
-                    <div className='flex h-full items-center justify-center rounded-[12px] border border-dashed border-[#d8dbe1] bg-[#fafafa] px-6 text-center text-[14px] text-[#8a909a]'>
-                      先截取一个区域，识别内容会显示在这里。
-                    </div>
-                  )}
-                </div>
-              </section>
-
-              <section className='min-h-[440px] overflow-hidden rounded-[14px] border border-[#d8dbe1] bg-[#fafafa] shadow-[0_1px_2px_rgba(0,0,0,0.04)]'>
-                <div className='border-b border-[#eceef2] bg-white px-5 py-4'>
-                  <div className='text-[15px] font-medium text-[#262a31]'>翻译结果</div>
-                  <div className='mt-1 text-[13px] text-[#7a818c]'>
-                    {captureHasResult ? '翻译内容会和 OCR 结果并排显示。' : '截图处理完成后，这里会显示翻译结果。'}
-                  </div>
-                </div>
-                <div className='h-[calc(100%-80px)] overflow-auto p-5'>
-                  {captureHasResult ? (
-                    <div className='whitespace-pre-wrap break-words rounded-[12px] bg-white p-4 text-[15px] leading-relaxed text-[#2b2f36]'>
-                      {captureTranslatedText || '这张截图没有返回翻译文本。'}
-                    </div>
-                  ) : (
-                    <div className='flex h-full items-center justify-center rounded-[12px] border border-dashed border-[#d8dbe1] bg-white px-6 text-center text-[14px] text-[#8a909a]'>
-                      OCR 完成后，翻译结果会显示在这里。
-                    </div>
-                  )}
-                </div>
-              </section>
-            </div>
-
-            <div className='mt-4 flex flex-wrap items-center justify-between gap-3 rounded-[14px] border border-[#e1e4e8] bg-[#fafafa] px-4 py-2.5 text-[12px]'>
-              <div className={clsx('leading-5', footerStatusTone)}>
-                {capture.message}
-              </div>
-              <div className='flex flex-wrap items-center gap-2 text-[#7a7f87]'>
-                <span>{targetLanguageLabel}</span>
-                <span>•</span>
-                <span>{providerMetaLabel}</span>
-                {capture?.overlay?.regions?.length ? (
-                  <>
-                    <span>•</span>
-                    <span>{capture.overlay.regions.length} 个区域</span>
-                  </>
-                ) : null}
-              </div>
-            </div>
           </>
         ) : null}
 
